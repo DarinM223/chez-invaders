@@ -1,0 +1,9 @@
+_deps/
+CMakeFiles/
+/chez-invaders
+*.cmake
+CMakeCache.txt
+compile_commands.json
+/game.so
+Makefile
+/raylib/*.so
