@@ -1,31 +1,34 @@
-; (load-shared-object "./libraylib.so")
-(import (raylib rlgl (0 3)))
+(import (raylib raylib (0 3)))
 
-;; game.ss
+(define (safe-call thunk)
+  (guard (condition
+          [else
+           (display "[Scheme Error]: ")
+           (display-condition condition)
+           (newline)])
+    (thunk)))
 
-;; 1. Use top-level-bound? to protect game state from resets on reload
-(define *player-pos* '(100.0 . 200.0))
-(define *speed* 4.0)
+(define rectangles
+  (list
+   (make-rectangle 50.0 50.0 100.0 100.0)
+   (make-rectangle 100.0 100.0 100.0 100.0)))
 
-;; 2. Logic loop (updates values)
-(define (game-init)
+(define (drop-rectangle rect)
+  (when (<= (+ (rectangle-get rect (height))
+               (rectangle-get rect (y))) (get-screen-height))
+    (rectangle-set! rect (y) (fl+ 1.0 (rectangle-get rect (y))))))
+
+(define (user-game-init)
   (display "Game logic initialized!\n"))
 
-(define (game-update)
-  ;; We can access Raylib functions if we bind them via Chez FFI,
-  ;; or mutate variables locally.
-  (let ((x (car *player-pos*))
-        (y (cdr *player-pos*)))
-    ;; Example simulation: simply drift the entity to show it's updating
-    (set! *player-pos* (cons (+ x 0.5) y))))
+(define (user-game-update)
+  (for-each drop-rectangle rectangles))
 
-;; 3. Render loop
-(define (game-draw)
-  ;; In a full framework, you'd use (foreign-procedure "DrawCircle" ...)
-  ;; For this boilerplate, we'll let C fetch data, or write output:
-  (draw-rectangle 0 0 100 100)
-  '())
-; (display "Player Position X: ")
-; (display (car *player-pos*))
-; (newline)
+(define (user-game-draw)
+  (for-each (lambda (rect) (draw-rectangle-rec rect BLACK)) rectangles)
+  (draw-circle 200 200 50.0 BLUE)
+  (collect))
 
+(define (game-init) (safe-call user-game-init))
+(define (game-update) (safe-call user-game-update))
+(define (game-draw) (safe-call user-game-draw))

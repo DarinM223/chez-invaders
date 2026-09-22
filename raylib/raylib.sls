@@ -8279,21 +8279,21 @@
         (cond
           [(null? libs) (error 'raylib "Raylib not found")]
           [(file-exists?
-             (string-append (caar libs) "/raylib/raylib.dll"))
-           (string-append (caar libs) "/raylib/raylib.dll")]
+             (string-append (caar libs) "/raylib/libraylib.dll"))
+           (string-append (caar libs) "/raylib/libraylib.dll")]
           [(file-exists?
-             (string-append (caar libs) "/raylib.dll"))
-           (string-append (caar libs) "/raylib.dll")]
+             (string-append (caar libs) "/libraylib.dll"))
+           (string-append (caar libs) "/libraylib.dll")]
           [(file-exists?
-             (string-append (caar libs) "./raylib.dll"))
-           (string-append (caar libs) "./raylib.dll")]
+             (string-append (caar libs) "./libraylib.dll"))
+           (string-append (caar libs) "./libraylib.dll")]
           [(file-exists?
-             (string-append (caar libs) "/raylib/raylib.so"))
-           (string-append (caar libs) "/raylib/raylib.so")]
+             (string-append (caar libs) "/raylib/libraylib.so"))
+           (string-append (caar libs) "/raylib/libraylib.so")]
           [(file-exists?
-             (string-append (caar libs) "/raylib.so"))
-           (string-append (caar libs) "/raylib.so")]
+             (string-append (caar libs) "/libraylib.so"))
+           (string-append (caar libs) "/libraylib.so")]
           [(file-exists?
-             (string-append (caar libs) "./raylib.so"))
-           (string-append (caar libs) "./raylib.so")]
+             (string-append (caar libs) "./libraylib.so"))
+           (string-append (caar libs) "./libraylib.so")]
           [else (loop (cdr libs))])))))
