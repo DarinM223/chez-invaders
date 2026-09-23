@@ -1,15 +1,12 @@
 #include "raylib.h"
+#include "repl.h"
 #include "scheme.h" // Provided by Chez Scheme installation
 #include <stdio.h>
-#include <string.h>
 
 // Helper to safely load/reload the scheme file
 void reload_game_logic()
 {
     printf("[Engine] Reloading game.ss...\n");
-    ptr load_symbol = Stop_level_value(Sstring_to_symbol("load"));
-    Scall1(load_symbol, Sstring("boot.ss"));
-
     ptr safe_load_proc = Stop_level_value(Sstring_to_symbol("safe-load-file"));
     if (!Sprocedurep(safe_load_proc)) {
         printf("[Fatal C Error] safe-load routine is not bound in Scheme "
@@ -19,6 +16,11 @@ void reload_game_logic()
 
     Scall1(safe_load_proc, Sstring("game.ss"));
 }
+
+typedef enum main_state {
+    STATE_RUNNING = 1,
+    STATE_REPL = 2,
+} main_state;
 
 int main(int argc, char *argv[])
 {
@@ -30,6 +32,8 @@ int main(int argc, char *argv[])
     Sregister_boot_file("/usr/lib/csv10.4.1/ta6le/scheme.boot");
     Sbuild_heap(NULL, NULL);
 
+    ptr load_symbol = Stop_level_value(Sstring_to_symbol("load"));
+    Scall1(load_symbol, Sstring("boot.ss"));
     reload_game_logic();
 
     ptr game_init = Stop_level_value(Sstring_to_symbol("game-init"));
@@ -39,6 +43,8 @@ int main(int argc, char *argv[])
     InitWindow(800, 450, "Raylib + Chez Scheme Hot Reloading");
     SetTargetFPS(60);
 
+    main_state state = STATE_RUNNING;
+    repl repl = {0};
     while (!WindowShouldClose()) {
         // Trigger Hot Reload on 'p' keypress
         if (IsKeyPressed(KEY_P)) {
@@ -46,20 +52,40 @@ int main(int argc, char *argv[])
             reload_game_logic();
         }
 
-        // Fetch frame pointers dynamically in case they were updated/redefined
         ptr game_update = Stop_level_value(Sstring_to_symbol("game-update"));
-        ptr game_draw = Stop_level_value(Sstring_to_symbol("game-draw"));
-
         if (Sprocedurep(game_update)) {
             Scall0(game_update);
         }
 
+        if (IsKeyPressed(KEY_GRAVE)) {
+            GetCharPressed(); // Eat grave key to prevent it from being added to
+                              // input buffer.
+            if (state == STATE_REPL) {
+                state = STATE_RUNNING;
+            } else {
+                state = STATE_REPL;
+            }
+        }
+
+        if (state == STATE_REPL) {
+            repl_update(&repl);
+        }
+
         BeginDrawing();
         ClearBackground(RAYWHITE);
+
+        ptr game_draw = Stop_level_value(Sstring_to_symbol("game-draw"));
         if (Sprocedurep(game_draw)) {
             Scall0(game_draw);
         }
-        DrawText("Press p to Hot Reload game.ss", 10, 10, 20, MAGENTA);
+
+        if (state == STATE_REPL) {
+            repl_draw(&repl);
+        } else {
+            DrawText("Press p to hot reload, ` to go to REPL", 10, 10, 20,
+                     MAGENTA);
+        }
+
         EndDrawing();
     }
 

@@ -34,4 +34,4 @@ target_link_libraries(chez-invaders PRIVATE
     "${CHEZ_INSTALL_DIR}/ta6le/liblz4.a"
     uuid m dl rt pthread ncurses # Core OS/Chez dependencies depending on build
 )
-target_sources(chez-invaders PRIVATE main.c)
+target_sources(chez-invaders PRIVATE main.c repl.c)

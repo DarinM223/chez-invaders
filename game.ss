@@ -1,5 +1,12 @@
 (import (raylib raylib (0 3)))
 
+(define-syntax define-toplevel
+  (lambda (stx)
+    (syntax-case stx ()
+      [(_ id value) (identifier? #'id)
+       #'(unless (top-level-bound? (quote id))
+           (define-top-level-value (quote id) value))])))
+
 (define (safe-call thunk)
   (guard (condition
           [else
@@ -8,7 +15,7 @@
            (newline)])
     (thunk)))
 
-(define rectangles
+(define-toplevel rectangles
   (list
    (make-rectangle 50.0 50.0 100.0 100.0)
    (make-rectangle 100.0 100.0 100.0 100.0)))
