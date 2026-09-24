@@ -5,10 +5,10 @@
 #include <stddef.h>
 #include <stdint.h>
 #define TEXT_CAPACITY 512
-#define HISTORY_CAPACITY 6 // For 5 remembered elements
+#define HISTORY_CAPACITY 5
 
 typedef struct repl_history {
-    char data[HISTORY_CAPACITY][TEXT_CAPACITY];
+    char data[HISTORY_CAPACITY + 1][TEXT_CAPACITY];
     bool dirty;
     int16_t current_selection;
     int16_t start;
