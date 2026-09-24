@@ -100,17 +100,36 @@ void repl_update(repl *repl)
         }
         repl->input_buf_count = 0;
         repl->input_buf[repl->input_buf_count] = '\0';
-    } else if (IsKeyPressed(KEY_BACKSPACE)) {
         repl->history.dirty = true;
+    } else if (IsKeyDown(KEY_BACKSPACE)) {
+        repl->history.dirty = true;
+        double current_time = GetTime();
+        if (current_time - repl->delay_start < 0.06) {
+            return;
+        }
         // If keypress is backspace, remove character from input buffer.
         if (repl->input_buf_count > 0) {
             repl->input_buf_count--;
             repl->input_buf[repl->input_buf_count] = '\0';
         }
+        repl->delay_start = current_time;
     } else if (IsKeyPressed(KEY_UP)) {
         repl_scroll_up(repl);
     } else if (IsKeyPressed(KEY_DOWN)) {
         repl_scroll_down(repl);
+    } else if (IsKeyPressed(KEY_V) &&
+               (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL))) {
+        const char *clipboard = GetClipboardText();
+        if (clipboard) {
+            repl->history.dirty = true;
+            size_t i = 0;
+            size_t clipboard_end = repl->input_buf_count + strlen(clipboard);
+            while (repl->input_buf_count < TEXT_CAPACITY - 1 &&
+                   repl->input_buf_count < clipboard_end) {
+                repl->input_buf[repl->input_buf_count++] = clipboard[i++];
+            }
+            repl->input_buf[repl->input_buf_count] = '\0';
+        }
     } else {
         // Listen to keypresses, then add key to input buffer.
         char ch;

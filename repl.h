@@ -20,6 +20,7 @@ typedef struct repl {
     size_t input_buf_count;
     char output_buf[TEXT_CAPACITY];
     repl_history history;
+    double delay_start;
 } repl;
 
 void repl_update(repl *repl);

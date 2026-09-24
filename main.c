@@ -84,7 +84,7 @@ int main(int argc, char *argv[])
     repl repl = {0};
 
     double last_time = GetTime();
-    bool reload_on_save = false;
+    bool reload_on_save = true;
     while (!WindowShouldClose()) {
         // Trigger Hot Reload on 'p' keypress
         if (IsKeyPressed(KEY_P)) {
