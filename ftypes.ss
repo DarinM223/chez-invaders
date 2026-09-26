@@ -1,0 +1,87 @@
+(library (ftypes)
+  (export with-ftypes)
+  (import (chezscheme))
+
+  (meta define (split-string-at-dot s)
+    (let loop ([chars (string->list s)]
+               [part '()]
+               [parts '()])
+      (cond
+       [(null? chars)
+        (reverse (cons (list->string (reverse part)) parts))]
+       [(char=? (car chars) #\.)
+        (loop (cdr chars) '()
+              (cons (list->string (reverse part)) parts))]
+       [else (loop (cdr chars) (cons (car chars) part) parts)])))
+
+  (meta define (split-identifier stx)
+    (syntax-case stx ()
+      [id (identifier? #'id)
+          (let* ([name (symbol->string (syntax->datum #'id))]
+                 [parts (split-string-at-dot name)]
+                 [symbols (map (lambda (part)
+                                 (or (string->number part) (string->symbol part)))
+                               parts)])
+            (map (lambda (sym) (datum->syntax #'id sym)) symbols))]
+      [_ (syntax-error #'id "expected an identifier")]))
+
+  (meta define (contains-dot? stx)
+    (syntax-case stx ()
+      (id (identifier? #'id)
+          (let* ([name (symbol->string (syntax->datum #'id))]
+                 [parts (split-string-at-dot name)])
+            (> (length parts) 1)))))
+
+  (meta define (head-identifier stx)
+    (syntax-case stx ()
+      (id (identifier? #'id)
+          (let* ([name (symbol->string (syntax->datum #'id))]
+                 [parts (split-string-at-dot name)]
+                 [symbols (map string->symbol parts)])
+            (datum->syntax #'id (car symbols))))))
+
+  (meta define (lookup-identifier id env)
+    (cond
+     [(null? env) #f]
+     [(free-identifier=? id (caar env)) (cadar env)]
+     [else (lookup-identifier id (cdr env))]))
+
+  (meta define (parse-body body env)
+    (syntax-case body ()
+      [(op id value) (and (identifier? #'op)
+                          (literal-identifier=? #'op (datum->syntax #'op ':=))
+                          (identifier? #'id)
+                          (contains-dot? #'id)
+                          (lookup-identifier (head-identifier #'id) env))
+       (with-syntax ([head (head-identifier #'id)])
+         (with-syntax ([type (lookup-identifier #'head env)]
+                       [(fields ...) (cdr (split-identifier #'id))]
+                       [parsed-value (parse-body #'value env)])
+           #'(ftype-set! type (fields ...) head parsed-value)))]
+      [id (and (identifier? #'id)
+               (contains-dot? #'id)
+               (lookup-identifier (head-identifier #'id) env))
+       (with-syntax ([head (head-identifier #'id)])
+         (with-syntax ([type (lookup-identifier #'head env)]
+                       [(fields ...) (cdr (split-identifier #'id))])
+           #'(ftype-ref type (fields ...) head)))]
+      [(head tail ...)
+       (with-syntax ([head (parse-body #'head env)]
+                     [(rest ...) (parse-body #'(tail ...) env)])
+         #'(head rest ...))]
+      [else body]))
+
+  (define-syntax (with-ftypes stx)
+    (syntax-case stx ()
+      [(_ [form ...] body ...)
+       (let ([env (fold-left
+                   (lambda (acc form)
+                     (syntax-case form ()
+                       [(type ids ...)
+                        (fold-left (lambda (acc id) (cons (list id #'type) acc))
+                                   acc #'(ids ...))]))
+                   '()
+                   #'(form ...))])
+         (with-syntax ([(body ...)
+                        (map (lambda (body) (parse-body body env)) #'(body ...))])
+           #'(begin body ...)))])))

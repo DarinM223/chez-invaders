@@ -4,7 +4,9 @@ CMakeFiles/
 *.cmake
 CMakeCache.txt
 compile_commands.json
+/ftypes.so
 /game.so
 /boot.so
 Makefile
 /raylib/*.so
+/chez-raylib/*.so
