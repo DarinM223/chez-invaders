@@ -45,7 +45,9 @@ void inotify_callback(const char *filename, void *ctx)
         strcmp(ext, "sps") == 0 || strcmp(ext, "sls") == 0 ||
         strcmp(ext, "sld") == 0 || strcmp(ext, "glsl") == 0 ||
         strcmp(ext, "glslv") == 0 || strcmp(ext, "glslf") == 0 ||
-        strcmp(ext, "vert") == 0 || strcmp(ext, "frag") == 0) {
+        strcmp(ext, "vert") == 0 || strcmp(ext, "frag") == 0 ||
+        strcmp(ext, "so") == 0 || strcmp(ext, "dylib") == 0 ||
+        strcmp(ext, "dll") == 0) {
         reload_game_logic();
     } else {
         printf("Unrecognized file extension: %s\n", ext);
@@ -73,12 +75,13 @@ int main(int argc, char *argv[])
     Scall1(load_symbol, Sstring("boot.ss"));
     reload_game_logic();
 
+    InitWindow(800, 450, "Raylib + Chez Scheme Hot Reloading");
+    SetTargetFPS(60);
+
     ptr game_init = Stop_level_value(Sstring_to_symbol("game-init"));
     if (Sprocedurep(game_init)) {
         Scall0(game_init);
     }
-    InitWindow(800, 450, "Raylib + Chez Scheme Hot Reloading");
-    SetTargetFPS(60);
 
     main_state state = STATE_RUNNING;
     repl repl = {0};
@@ -86,17 +89,6 @@ int main(int argc, char *argv[])
     double last_time = GetTime();
     bool reload_on_save = true;
     while (!WindowShouldClose()) {
-        // Trigger Hot Reload on 'p' keypress
-        if (IsKeyPressed(KEY_P)) {
-            if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
-                reload_on_save = !reload_on_save;
-                printf("Toggling reload on save to %b\n", reload_on_save);
-                inotify_watcher_drain_files(&watcher);
-            } else {
-                reload_game_logic();
-            }
-        }
-
         if (reload_on_save) {
             double current_time = GetTime();
             if (current_time - last_time >= 1) {
@@ -117,6 +109,17 @@ int main(int argc, char *argv[])
 
         switch (state) {
         case STATE_RUNNING: {
+            // Trigger Hot Reload on 'p' keypress
+            if (IsKeyPressed(KEY_P)) {
+                if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
+                    reload_on_save = !reload_on_save;
+                    printf("Toggling reload on save to %b\n", reload_on_save);
+                    inotify_watcher_drain_files(&watcher);
+                } else {
+                    reload_game_logic();
+                }
+            }
+
             ptr game_update =
                 Stop_level_value(Sstring_to_symbol("game-update"));
             if (Sprocedurep(game_update)) {

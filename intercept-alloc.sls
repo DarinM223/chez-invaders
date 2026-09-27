@@ -1,4 +1,4 @@
-(library (raylib intercept-alloc)
+(library (intercept-alloc)
   (export foreign-alloc with-auto-free)
   (import (prefix (chezscheme) cs:)
           (except (chezscheme) foreign-alloc))
