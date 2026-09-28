@@ -1,5 +1,5 @@
 (library (ftypes)
-  (export with-ftypes)
+  (export ftype-copy-fields! with-ftypes)
   (import (chezscheme))
 
   (meta define (split-string-at-dot s)
@@ -32,6 +32,20 @@
                  [parts (split-string-at-dot name)])
             (> (length parts) 1)))))
 
+  (meta define (is-reference? stx)
+    (syntax-case stx ()
+      (id (identifier? #'id)
+          (let* ([name (symbol->string (syntax->datum #'id))])
+            (and (fx> (string-length name) 1) (char=? (string-ref name 0) #\&))))))
+
+  (meta define (remove-reference stx)
+    (syntax-case stx ()
+      (id (identifier? #'id)
+          (let* ([name (symbol->string (syntax->datum #'id))])
+            (datum->syntax #'id
+                           (string->symbol
+                            (list->string (cdr (string->list name)))))))))
+
   (meta define (head-identifier stx)
     (syntax-case stx ()
       (id (identifier? #'id)
@@ -46,8 +60,55 @@
      [(free-identifier=? id (caar env)) (cadar env)]
      [else (lookup-identifier id (cdr env))]))
 
+  (define-syntax (ftype-copy-fields! stx)
+    (syntax-case stx ()
+      [(_ ftype dest src)
+       (let* ([blueprint-expr #'(cdr (ftype-pointer->sexpr
+                                      (make-ftype-pointer ftype 0)))]
+              [layout (eval (syntax->datum blueprint-expr)
+                            (interaction-environment))])
+         (define (generate-assignments layout path acc)
+           (fold-left
+            (lambda (acc field-spec)
+              (let* ([field-name (datum->syntax #'ftype (car field-spec))]
+                     [field-type (cadr field-spec)]
+                     [full-path (append path (list field-name))])
+                (cond
+                 [(and (pair? field-type) (eq? (car field-type) 'struct))
+                  (generate-assignments (cdr field-type) full-path acc)]
+                 [(and (pair? field-type) (eq? (car field-type) 'bits))
+                  (generate-assignments
+                   (map (lambda (t) (list (car t) (cadr t)))
+                        (cdr field-type))
+                   full-path acc)]
+                 [(and (pair? field-type) (eq? (car field-type) 'array))
+                  (generate-assignments
+                   (map (lambda (i) (list i (caddr field-type)))
+                        (iota (cadr field-type)))
+                   full-path acc)]
+                 [else
+                  (with-syntax ([(p ...) full-path])
+                    (cons
+                     #'(ftype-set! ftype (p ...) dest
+                                   (ftype-ref ftype (p ...) src))
+                     acc))])))
+            acc layout))
+         (with-syntax ([(stmt ...) (generate-assignments layout '() '())])
+           #'(begin stmt ...)))]))
+
   (meta define (parse-body body env)
     (syntax-case body ()
+      [(op id value) (and (identifier? #'op)
+                          (literal-identifier=? #'op
+                                                (datum->syntax #'op '::=)))
+       (begin
+         (with-syntax ([type (or (lookup-identifier #'id env)
+                                 (lookup-identifier #'value env))]
+                       [parsed-head (parse-body #'id env)]
+                       [parsed-value (parse-body #'value env)])
+           #'(ftype-copy-fields! type
+                                 parsed-head
+                                 parsed-value)))]
       [(op id value) (and (identifier? #'op)
                           (literal-identifier=? #'op (datum->syntax #'op ':=))
                           (identifier? #'id)
@@ -58,6 +119,14 @@
                        [(fields ...) (cdr (split-identifier #'id))]
                        [parsed-value (parse-body #'value env)])
            #'(ftype-set! type (fields ...) head parsed-value)))]
+      [id (and (identifier? #'id)
+               (is-reference? #'id)
+               (lookup-identifier
+                (head-identifier (remove-reference #'id)) env))
+          (with-syntax ([head (head-identifier (remove-reference #'id))])
+            (with-syntax ([type (lookup-identifier #'head env)]
+                          [(fields ...) (cdr (split-identifier (remove-reference #'id)))])
+              #'(ftype-&ref type (fields ...) head)))]
       [id (and (identifier? #'id)
                (contains-dot? #'id)
                (lookup-identifier (head-identifier #'id) env))
