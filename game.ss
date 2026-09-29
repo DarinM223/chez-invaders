@@ -28,7 +28,7 @@
 
 (define-ftype ShipEnemySlot
   (struct
-    [full boolean]
+    [full? boolean]
     [data (union
             [free (bits
                     [exists? unsigned 1]
@@ -42,7 +42,7 @@
     [slots (array 100 ShipEnemySlot)]
     [free-top (bits
                 [exists? unsigned 1]
-                [index unsigned 31])]
+                [next unsigned 31])]
     [generation unsigned-16]
     [size unsigned-32]))
 
@@ -58,6 +58,21 @@
                 [struct-sexpr (ftype-pointer->sexpr dummy-ptr)])
            (map car (cdr struct-sexpr)))])))
 
+(define (manager-init manager)
+  (with-ftypes ([ShipEnemyManager manager])
+               (for-each (lambda (i)
+                           (:= manager.slots.i.full? #f)
+                           (if (fx< (fx+ i 1) 100)
+                               (begin
+                                 (:= manager.slots.i.data.free.exists? 1)
+                                 (:= manager.slots.i.data.free.next (fx+ i 1)))
+                               (:= manager.slots.i.data.free.exists? 0)))
+                         (iota 100))
+               (:= manager.free-top.exists? 1)
+               (:= manager.free-top.next 0)
+               (:= manager.generation 0)
+               (:= manager.size 0)))
+
 (define (add-ship-enemy manager actor)
   (with-ftypes
    ([ShipEnemyManager manager]
@@ -70,9 +85,10 @@
    ;; 5. Increment manager's size
    (if manager.free-top.exists?
        (begin
-         (let ([slot manager.free-top.index])
+         (let ([slot manager.free-top.next])
            (:= manager.free-top.exists? manager.slots.slot.data.free.exists?)
-           (:= manager.free-top.index manager.slots.slot.data.free.next)
+           (:= manager.free-top.next manager.slots.slot.data.free.next)
+           (:= manager.slots.slot.full? #t)
            (::= &manager.slots.slot.data.full.data actor)
            (:= manager.slots.slot.data.full.generation manager.generation)
            (:= manager.size (fx+ manager.size 1))))
@@ -88,7 +104,20 @@
    ;; 3. set the slot to free with the next being the manager's free top.
    ;; 4. set the manager's free top to the slot
    ;; 5. increment the generation and decrement the size
-   '()))
+   (let ([index (ShipEnemy-index-index index)]
+         [generation (ShipEnemy-index-generation index)])
+     (if manager.slots.index.full?
+         (if (fx= manager.slots.index.data.full.generation generation)
+             (begin
+               (:= manager.slots.index.full? #f)
+               (:= manager.slots.index.data.free.exists? manager.free-top.exists?)
+               (:= manager.slots.index.data.free.next manager.free-top.next)
+               (:= manager.free-top.exists? 1)
+               (:= manager.free-top.next index)
+               (:= manager.generation (fx+ manager.generation 1))
+               (:= manager.size (fx- manager.size 1)))
+             (raise "different generation"))
+         (raise "slot is free")))))
 
 (define (get-ship-enemy manager index)
   (with-ftypes
@@ -96,7 +125,21 @@
    ;; todo:
    ;; get the slot at the index's index if the
    ;; generation of the slot == generation of the index
-   '()))
+   (if manager.slots.index.full?
+       (if (fx= (Ship-index-generation index) manager.slots.index.data.full.generation)
+           &manager.slots.index.data.full.data
+           (raise "different generation"))
+       (raise "slot is free"))))
+
+(define (for-each-ship-enemy f manager)
+  (with-ftypes
+   ([ShipEnemyManager manager])
+   (do ([i 0 (fx+ i 1)])
+       ((fx>= i manager.size))
+     (when (and manager.slots.i.full?
+              (fx= manager.slots.i.data.full.generation
+                   manager.generation))
+         (f &manager.slots.i.data.full.data)))))
 
 (define-toplevel rectangles
   (list
@@ -106,20 +149,20 @@
 (define-toplevel ship-y 60.0)
 (define-toplevel ship-angle 0.)
 (define-toplevel ship-velocity 0.2)
-(define-toplevel enemies (foreign-alloc (ftype-sizeof ShipEnemies)))
-(define-toplevel enemies-size 0)
+(define-toplevel enemies (foreign-alloc (ftype-sizeof ShipEnemyManager)))
 
-(define (get-enemies) (make-ftype-pointer ShipEnemies enemies))
+(define (get-enemies) (make-ftype-pointer ShipEnemyManager enemies))
+(manager-init (get-enemies))
 
-(define (make-enemy x y angle)
-  (define size enemies-size)
-  (define enemies (get-enemies))
-  (with-ftypes
-   [(ShipEnemies enemies)]
-   (:= enemies.size.x x)
-   (:= enemies.size.y y)
-   (:= enemies.size.angle angle)
-   (set! enemies-size (fx+ enemies-size 1))))
+;; (define (make-enemy x y angle)
+;;   (define size enemies-size)
+;;   (define enemies (get-enemies))
+;;   (with-ftypes
+;;    [(ShipEnemies enemies)]
+;;    (:= enemies.size.x x)
+;;    (:= enemies.size.y y)
+;;    (:= enemies.size.angle angle)
+;;    (set! enemies-size (fx+ enemies-size 1))))
 
 (define last-time (get-time))
 
@@ -178,9 +221,19 @@
     (when (fl>= ship-y height) (set! ship-y height))))
 
 (define (user-game-init)
+  (define enemies (get-enemies))
   (display "Game logic initialized!\n")
   (set! ship-x (fl/ (exact->inexact (get-screen-width)) 2.))
-  (set! ship-y (fl- (fl+ (exact->inexact (get-screen-height))) 20.)))
+  (set! ship-y (fl- (fl+ (exact->inexact (get-screen-height))) 20.))
+  (with-auto-free
+   (do ([x 60. (fl+ x 40.)])
+       ((fl>= x (exact->inexact (get-screen-width))))
+     (let ([enemy (make-ftype-pointer ShipEnemy (foreign-alloc (ftype-sizeof ShipEnemy)))])
+       (with-ftypes ([ShipEnemy enemy])
+                    (:= enemy.x x)
+                    (:= enemy.y 60.)
+                    (:= enemy.angle PI)
+                    (add-ship-enemy enemies enemy))))))
 
 (define (user-game-update)
   (define curr-time (get-time))
@@ -197,14 +250,20 @@
   ;; the most recent definition of ftype.
   (define enemies (get-enemies))
   (with-ftypes
-   [(ShipEnemies enemies)]
+   [(ShipEnemyManager enemies)]
    (with-auto-free
     (clear-background BLACK)
     (for-each (lambda (rect) (draw-rectangle-rec rect BLUE)) rectangles)
     (spaceship-draw ship-x ship-y 3. WHITE ship-angle)
-    (do ([i 0 (fx+ i 1)])
-        ((fx>= i enemies-size))
-      (spaceship-draw enemies.i.x enemies.i.y 3. WHITE enemies.i.angle)))))
+    (for-each-ship-enemy
+     (lambda (enemy)
+       (with-ftypes ([ShipEnemy enemy])
+                    (spaceship-draw enemy.x enemy.y 3. WHITE enemy.angle)))
+     enemies)
+    ;; (do ([i 0 (fx+ i 1)])
+    ;;     ((fx>= i enemies-size))
+    ;;   (spaceship-draw enemies.i.x enemies.i.y 3. WHITE enemies.i.angle))
+    )))
 
 (define (game-init) (safe-call user-game-init))
 (define (game-update) (safe-call user-game-update))
