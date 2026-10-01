@@ -5,6 +5,7 @@ CMakeFiles/
 CMakeCache.txt
 compile_commands.json
 /ftypes.so
+/generational.so
 /game.so
 /boot.so
 /intercept-alloc.so

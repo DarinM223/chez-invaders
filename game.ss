@@ -2,7 +2,8 @@
         (raylib raymath)
         (raylib intercept-alloc)
         (raylib raylib (0 3))
-        (ftypes))
+        (ftypes)
+        (generational))
 
 (define-syntax define-toplevel
   (lambda (stx)
@@ -10,6 +11,18 @@
       [(_ id value) (identifier? #'id)
        #'(unless (top-level-bound? (quote id))
            (define-top-level-value (quote id) value))])))
+
+(define-syntax (alloc-struct stx)
+  (syntax-case stx ()
+    [(_ ftype)
+     #'(make-ftype-pointer ftype (foreign-alloc (ftype-sizeof ftype)))]))
+
+(define-syntax (print-ftype-fields stx)
+  (syntax-case stx ()
+    [(_ ftype-id)
+     #'(let* ([dummy-ptr (make-ftype-pointer ftype-id 0)]
+              [struct-sexpr (ftype-pointer->sexpr dummy-ptr)])
+         (map car (cdr struct-sexpr)))]))
 
 (define (safe-call thunk)
   (guard (condition
@@ -25,155 +38,7 @@
     [y double]
     [angle double]))
 
-(meta define (syntax-prepend str stx)
-  (datum->syntax
-   stx
-   (string->symbol
-    (string-append str (symbol->string (syntax->datum stx))))))
-
-(meta define (syntax-append stx str)
-  (datum->syntax
-   stx
-   (string->symbol
-    (string-append (symbol->string (syntax->datum stx)) str))))
-
-(define-syntax (define-generational stx)
-  (syntax-case stx ()
-    [(_ actor-type)
-     (with-syntax ([actor-index-type (syntax-append #'actor-type "-index")]
-                   [actor-slot-type (syntax-append #'actor-type "-slot")]
-                   [actor-manager-type
-                    (syntax-append #'actor-type "-manager")])
-       (with-syntax ([make-actor-index
-                      (syntax-prepend "make-" #'actor-index-type)]
-                     [actor-index-index
-                      (syntax-append #'actor-index-type "-index")]
-                     [actor-index-generation
-                      (syntax-append #'actor-index-type "-generation")]
-                     [actor-manager-init
-                      (syntax-append #'actor-manager-type "-init!")]
-                     [actor-manager-add
-                      (syntax-append #'actor-manager-type "-add!")]
-                     [actor-manager-remove
-                      (syntax-append #'actor-manager-type "-remove!")]
-                     [actor-manager-index-at
-                      (syntax-append #'actor-manager-type "-index-at")]
-                     [actor-manager-for-each
-                      (syntax-append #'actor-manager-type "-for-each")])
-         #'(module
-             (export actor-manager-type
-                     actor-manager-init
-                     actor-manager-add
-                     actor-manager-remove
-                     actor-manager-index-at
-                     actor-manager-for-each)
-             (import (chezscheme) (ftypes))
-
-             (define-record actor-index-type
-               ([unsigned-32 index]
-                [unsigned-16 generation]))
-             (define-ftype actor-slot-type
-               (struct
-                 [full? boolean]
-                 [data (union
-                         [free (bits
-                                 [exists? unsigned 1]
-                                 [next unsigned 31])]
-                         [full (struct
-                                 [data actor-type]
-                                 [generation unsigned-16])])]))
-             (define-ftype actor-manager-type
-               (struct
-                 [slots (array 100 actor-slot-type)]
-                 [free-top (bits
-                             [exists? unsigned 1]
-                             [next unsigned 31])]
-                 [generation unsigned-16]
-                 [size unsigned-32]))
-             (define (actor-manager-init manager)
-               (with-ftypes
-                ([actor-manager-type manager])
-                ;; initialize each index to be free
-                ;; and point to the next index.
-                (for-each
-                 (lambda (i)
-                   (:= manager.slots.i.full? #f)
-                   (if (fx< (fx+ i 1) 100)
-                       (begin
-                         (:= manager.slots.i.data.free.exists? 1)
-                         (:= manager.slots.i.data.free.next (fx+ i 1)))
-                       (:= manager.slots.i.data.free.exists? 0)))
-                 (iota 100))
-                (:= manager.free-top.exists? 1)
-                (:= manager.free-top.next 0)
-                (:= manager.generation 0)
-                (:= manager.size 0)))
-             (define (actor-manager-add manager actor)
-               (with-ftypes
-                ([actor-manager-type manager]
-                 [actor-type actor])
-                (if manager.free-top.exists?
-                    (begin
-                      (let ([slot manager.free-top.next])
-                        (:= manager.free-top.exists?
-                            manager.slots.slot.data.free.exists?)
-                        (:= manager.free-top.next
-                            manager.slots.slot.data.free.next)
-                        (:= manager.slots.slot.full? #t)
-                        (::= &manager.slots.slot.data.full.data actor)
-                        (:= manager.slots.slot.data.full.generation
-                            manager.generation)
-                        (:= manager.size (fx+ manager.size 1))))
-                    (raise "no free top"))))
-             (define (actor-manager-index-at manager i)
-               (with-ftypes
-                ([actor-manager-type manager])
-                (if (and manager.slots.i.full?
-                         (fx= manager.slots.i.data.full.generation
-                              manager.generation))
-                    (make-actor-index
-                     i manager.slots.i.data.full.generation)
-                    (raise "empty or invalid generation slot at index"))))
-             (define (actor-manager-remove manager index)
-               (with-ftypes
-                ([actor-manager-type manager])
-                (let ([index (actor-index-index index)]
-                      [generation (actor-index-generation index)])
-                  (if manager.slots.index.full?
-                      (if (fx= manager.slots.index.data.full.generation
-                               generation)
-                          (begin
-                            (:= manager.slots.index.full? #f)
-                            (:= manager.slots.index.data.free.exists?
-                                manager.free-top.exists?)
-                            (:= manager.slots.index.data.free.next
-                                manager.free-top.next)
-                            (:= manager.free-top.exists? 1)
-                            (:= manager.free-top.next index)
-                            (:= manager.generation
-                                (fx+ manager.generation 1))
-                            (:= manager.size (fx- manager.size 1)))
-                          (raise "different generation"))
-                      (raise "slot is free")))))
-             (define (actor-manager-for-each f manager)
-               (with-ftypes
-                ([actor-manager-type manager])
-                (do ([i 0 (fx+ i 1)])
-                    ((fx>= i manager.size))
-                  (when (and manager.slots.i.full?
-                             (fx= manager.slots.i.data.full.generation
-                                  manager.generation))
-                    (f i &manager.slots.i.data.full.data))))))))]))
-
-(define-generational ShipEnemy)
-
-(define-syntax print-ftype-fields
-  (lambda (x)
-    (syntax-case x ()
-      [(_ ftype-id)
-       #'(let* ([dummy-ptr (make-ftype-pointer ftype-id 0)]
-                [struct-sexpr (ftype-pointer->sexpr dummy-ptr)])
-           (map car (cdr struct-sexpr)))])))
+(define-generational ShipEnemy 100)
 
 (define-toplevel rectangles
   (list
@@ -218,13 +83,27 @@
          [rot-y (fl+ (fl* local-x sin-r) (fl* local-y cos-r))])
     (make-vector-2 (fl+ cx rot-x) (fl+ cy rot-y))))
 
-(define (spaceship-draw x y scale color rad)
+(define (spaceship-triangles-cont x y scale rad k)
   (let* ([v-top (get-rotated-vertex x y 0.0 (fl* scale -10.0) rad)]
          [v-left (get-rotated-vertex x y (fl* scale -6.0) (fl* scale 5.0) rad)]
          [v-mid (get-rotated-vertex x y 0.0 (fl* scale 0.0) rad)]
          [v-right (get-rotated-vertex x y (fl* scale 6.0) (fl* scale 5.0) rad)])
-    (draw-triangle-fixed v-top v-left v-mid color)
-    (draw-triangle-fixed v-top v-mid v-right color)))
+    (k v-top v-left v-mid)
+    (k v-top v-mid v-right)))
+
+(define (spaceship-draw x y scale rad color)
+  (spaceship-triangles-cont x y scale rad
+   (lambda (a b c) (draw-triangle-fixed a b c color))))
+
+(define (spaceship-collides bullet-x bullet-y
+                            ship-x ship-y ship-scale ship-rad)
+  (let ([bullet (make-vector-2 bullet-x bullet-y)]
+        [collides #f])
+    (spaceship-triangles-cont ship-x ship-y ship-rad
+     (lambda (a b c)
+       (set! collides
+             (or collides (check-collision-point-triangle bullet a b c)))))
+    collides))
 
 (define (handle-keys dt)
   (when (is-key-down KEY_UP)
@@ -253,7 +132,7 @@
   (with-auto-free
    (do ([x 60. (fl+ x 40.)])
        ((fl>= x (exact->inexact (get-screen-width))))
-     (let ([enemy (make-ftype-pointer ShipEnemy (foreign-alloc (ftype-sizeof ShipEnemy)))])
+     (let ([enemy (alloc-struct ShipEnemy)])
        (with-ftypes ([ShipEnemy enemy])
                     (:= enemy.x x)
                     (:= enemy.y 60.)
@@ -280,12 +159,12 @@
    (with-auto-free
     (clear-background BLACK)
     (for-each (lambda (rect) (draw-rectangle-rec rect BLUE)) rectangles)
-    (spaceship-draw ship-x ship-y 2. WHITE ship-angle)
+    (spaceship-draw ship-x ship-y 2. ship-angle WHITE)
     (ShipEnemy-manager-for-each
      (lambda (enemy-idx enemy)
        (define enemy-gen-idx (ShipEnemy-manager-index-at enemies enemy-idx))
        (with-ftypes ([ShipEnemy enemy])
-                    (spaceship-draw enemy.x enemy.y 2. WHITE enemy.angle)))
+                    (spaceship-draw enemy.x enemy.y 2. enemy.angle WHITE)))
      enemies))))
 
 (define (game-init) (safe-call user-game-init))
