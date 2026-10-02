@@ -34,11 +34,16 @@
 
 (define-ftype ShipEnemy
   (struct
-    [x double]
-    [y double]
+    [position Vector-2]
     [angle double]))
 
+(define-ftype Bullet
+  (struct
+    [position Vector-2]
+    [velocity Vector-2]))
+
 (define-generational ShipEnemy 100)
+(define-generational Bullet 100)
 
 (define-toplevel rectangles
   (list
@@ -49,24 +54,21 @@
 (define-toplevel ship-angle 0.)
 (define-toplevel ship-velocity 0.2)
 (define-toplevel enemies (foreign-alloc (ftype-sizeof ShipEnemy-manager)))
+(define-toplevel bullets (foreign-alloc (ftype-sizeof Bullet-manager)))
 
 (define (get-enemies) (make-ftype-pointer ShipEnemy-manager enemies))
+(define (get-bullets) (make-ftype-pointer Bullet-manager bullets))
 
-(define last-time (get-time))
+(define-with-ftypes (vector-2-cross-product [Vector-2 v1 v2])
+  (fl- (fl* v1.x v2.y) (fl* v1.y v2.x)))
 
-(define (vector-2-cross-product v1 v2)
-  (with-ftypes [(Vector-2 v1 v2)]
-               (fl- (fl* v1.x v2.y) (fl* v1.y v2.x))))
+(define-with-ftypes (vector-2-subtract [Vector-2 v1 v2])
+  (make-vector-2 (fl- v1.x v2.x) (fl- v1.y v2.y)))
 
-(define (vector-2-subtract v1 v2)
-  (with-ftypes [(Vector-2 v1 v2)]
-               (make-vector-2 (fl- v1.x v2.x) (fl- v1.y v2.y))))
-
-(define (drop-rectangle rect)
-  (with-ftypes [(Rectangle rect)]
-               (when (fl<= (fl+ rect.height rect.y)
-                           (fixnum->flonum (get-screen-height)))
-                 (:= rect.y (fl+ 1. rect.y)))))
+(define-with-ftypes (drop-rectangle [Rectangle rect])
+  (when (fl<= (fl+ rect.height rect.y)
+              (fixnum->flonum (get-screen-height)))
+    (:= rect.y (fl+ 1. rect.y))))
 
 (define (draw-triangle-fixed v1 v2 v3 color)
   (let* ([edge1 (vector-2-subtract v2 v1)]
@@ -105,15 +107,23 @@
              (or collides (check-collision-point-triangle bullet a b c)))))
     collides))
 
+(define-with-ftypes (bullet-update manager bullet-idx [Bullet bullet] dt)
+  (:= bullet.position.x (fl+ bullet.position.x (fl* bullet.velocity.x dt)))
+  (:= bullet.position.y (fl+ bullet.position.y (fl* bullet.velocity.y dt)))
+  (when (or (fl> bullet.position.y (exact->inexact (get-screen-height)))
+            (fl< bullet.position.y 0.))
+    (let ([bullet-idx (Bullet-manager-index-at manager bullet-idx)])
+      (Bullet-manager-remove! manager bullet-idx))))
+
 (define (handle-keys dt)
   (when (is-key-down KEY_UP)
-    (set! ship-y (fl+ ship-y (fl* ship-velocity dt))))
-  (when (is-key-down KEY_DOWN)
     (set! ship-y (fl- ship-y (fl* ship-velocity dt))))
+  (when (is-key-down KEY_DOWN)
+    (set! ship-y (fl+ ship-y (fl* ship-velocity dt))))
   (when (is-key-down KEY_LEFT)
-    (set! ship-x (fl+ ship-x (fl* ship-velocity dt))))
+    (set! ship-x (fl- ship-x (fl* ship-velocity dt))))
   (when (is-key-down KEY_RIGHT)
-    (set! ship-x (fl- ship-x (fl* ship-velocity dt)))))
+    (set! ship-x (fl+ ship-x (fl* ship-velocity dt)))))
 
 (define (keep-in-bounds x y)
   (let ([height (fixnum->flonum (get-screen-height))]
@@ -129,24 +139,41 @@
   (set! ship-x (fl/ (exact->inexact (get-screen-width)) 2.))
   (set! ship-y (fl- (fl+ (exact->inexact (get-screen-height))) 20.))
   (ShipEnemy-manager-init! (get-enemies))
+  (Bullet-manager-init! (get-bullets))
   (with-auto-free
    (do ([x 60. (fl+ x 40.)])
        ((fl>= x (exact->inexact (get-screen-width))))
      (let ([enemy (alloc-struct ShipEnemy)])
        (with-ftypes ([ShipEnemy enemy])
-                    (:= enemy.x x)
-                    (:= enemy.y 60.)
-                    (:= enemy.angle PI)
-                    (ShipEnemy-manager-add! enemies enemy))))))
+         (:= enemy.position.x x)
+         (:= enemy.position.y 60.)
+         (:= enemy.angle PI)
+         (ShipEnemy-manager-add! enemies enemy))))))
+
+(define last-fire-time (get-time))
 
 (define (user-game-update)
   (eval-when (compile) (optimize-level 2))
   (define curr-time (get-time))
-  (define dt (fl* 1000. (fl- last-time curr-time)))
-  (set! last-time curr-time)
-  (for-each drop-rectangle rectangles)
-  (handle-keys dt)
-  (keep-in-bounds ship-x ship-y))
+  (define dt (fl* (get-frame-time) 1000.))
+  (define bullets (get-bullets))
+  (with-auto-free
+   (for-each drop-rectangle rectangles)
+   (when (and (is-key-down KEY_SPACE)
+              (fl> (fl- curr-time last-fire-time) .3))
+     (set! last-fire-time curr-time)
+     (let ([bullet (alloc-struct Bullet)])
+       (with-ftypes ([Bullet bullet])
+         (:= bullet.position.x ship-x)
+         (:= bullet.position.y (fl- ship-y 40.))
+         (:= bullet.velocity.x 0.)
+         (:= bullet.velocity.y (fl- 0.5))
+         (Bullet-manager-add! bullets bullet))))
+   (handle-keys dt)
+   (keep-in-bounds ship-x ship-y)
+   (Bullet-manager-for-each
+    (lambda (bullet-idx bullet) (bullet-update bullets bullet-idx bullet dt))
+    bullets)))
 
 (define (user-game-draw)
   (eval-when (compile) (optimize-level 2))
@@ -154,19 +181,30 @@
   ;; into the latest ftype pointer so that during a reload it always uses
   ;; the most recent definition of ftype.
   (define enemies (get-enemies))
-  (with-ftypes
-   [(ShipEnemyManager enemies)]
-   (with-auto-free
-    (clear-background BLACK)
-    (for-each (lambda (rect) (draw-rectangle-rec rect BLUE)) rectangles)
-    (spaceship-draw ship-x ship-y 2. ship-angle WHITE)
-    (ShipEnemy-manager-for-each
-     (lambda (enemy-idx enemy)
-       (define enemy-gen-idx (ShipEnemy-manager-index-at enemies enemy-idx))
-       (with-ftypes ([ShipEnemy enemy])
-                    (spaceship-draw enemy.x enemy.y 2. enemy.angle WHITE)))
-     enemies))))
+  (define bullets (get-bullets))
+  (with-ftypes [(ShipEnemy-manager enemies)
+                (Bullet-manager bullets)]
+    (with-auto-free
+     (clear-background BLACK)
+     (for-each (lambda (rect) (draw-rectangle-rec rect BLUE)) rectangles)
+     (spaceship-draw ship-x ship-y 2. ship-angle WHITE)
+     (ShipEnemy-manager-for-each
+      (lambda-ftypes (enemy-idx [ShipEnemy enemy])
+        (define enemy-gen-idx (ShipEnemy-manager-index-at enemies enemy-idx))
+        (spaceship-draw enemy.position.x enemy.position.y
+                        2. enemy.angle WHITE))
+      enemies)
+     (Bullet-manager-for-each 
+      (lambda-ftypes (bullet-idx [Bullet bullet])
+        (draw-circle-v &bullet.position 1.0 WHITE))
+      bullets))))
 
 (define (game-init) (safe-call user-game-init))
 (define (game-update) (safe-call user-game-update))
 (define (game-draw) (safe-call user-game-draw))
+
+;; Local Variables:
+;; eval: (put 'with-ftypes 'scheme-indent-function 1)
+;; eval: (put 'lambda-ftypes 'scheme-indent-function 1)
+;; eval: (put 'define-with-ftypes 'scheme-indent-function 1)
+;; End:

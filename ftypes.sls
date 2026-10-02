@@ -1,5 +1,5 @@
 (library (ftypes)
-  (export ftype-copy-fields! with-ftypes)
+  (export ftype-copy-fields! with-ftypes define-with-ftypes lambda-ftypes)
   (import (chezscheme))
 
   (meta define (split-string-at-dot s)
@@ -130,10 +130,10 @@
       [id (and (identifier? #'id)
                (contains-dot? #'id)
                (lookup-identifier (head-identifier #'id) env))
-       (with-syntax ([head (head-identifier #'id)])
-         (with-syntax ([type (lookup-identifier #'head env)]
-                       [(fields ...) (cdr (split-identifier #'id))])
-           #'(ftype-ref type (fields ...) head)))]
+          (with-syntax ([head (head-identifier #'id)])
+            (with-syntax ([type (lookup-identifier #'head env)]
+                          [(fields ...) (cdr (split-identifier #'id))])
+              #'(ftype-ref type (fields ...) head)))]
       [(head tail ...)
        (with-syntax ([head (parse-body #'head env)]
                      [(rest ...) (parse-body #'(tail ...) env)])
@@ -153,4 +153,47 @@
                    #'(form ...))])
          (with-syntax ([(body ...)
                         (map (lambda (body) (parse-body body env)) #'(body ...))])
-           #'(begin body ...)))])))
+           #'(begin body ...)))]))
+
+  (define-syntax (define-with-ftypes stx)
+    (syntax-case stx ()
+      [(_ (id args* ...) body* ...)
+       (with-syntax ([(args* ...)
+                      (fold-left append '()
+                                 (map (lambda (stx)
+                                        (syntax-case stx ()
+                                          [(_ args* ...) #'(args* ...)]
+                                          [arg (list #'arg)]))
+                                      #'(args* ...)))]
+                     [(ann-ftypes* ...) (filter (lambda (stx)
+                                                  (syntax-case stx ()
+                                                    [(typ args* ...) #t]
+                                                    [_ #f]))
+                                                #'(args* ...))])
+         #'(define (id args* ...)
+             (with-ftypes (ann-ftypes* ...)
+               body*) ...))]))
+
+  (define-syntax (lambda-ftypes stx)
+    (syntax-case stx ()
+      [(_ (args* ...) body* ...)
+       (with-syntax ([(args* ...)
+                      (fold-left append '()
+                                 (map (lambda (stx)
+                                        (syntax-case stx ()
+                                          [(_ args* ...) #'(args* ...)]
+                                          [arg (list #'arg)]))
+                                      #'(args* ...)))]
+                     [(ann-ftypes* ...) (filter (lambda (stx)
+                                                  (syntax-case stx ()
+                                                    [(typ args* ...) #t]
+                                                    [_ #f]))
+                                                #'(args* ...))])
+         #'(lambda (args* ...)
+             (with-ftypes (ann-ftypes* ...)
+               body*) ...))])))
+
+;; Local Variables:
+;; eval: (put 'meta 'scheme-indent-function 2)
+;; eval: (put 'with-ftypes 'scheme-indent-function 1)
+;; End:
