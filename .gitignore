@@ -9,6 +9,7 @@ compile_commands.json
 /game.so
 /boot.so
 /intercept-alloc.so
+/utils.so
 Makefile
 /raylib/*.so
 /chez-raylib/*.so

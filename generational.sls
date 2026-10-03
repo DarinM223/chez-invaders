@@ -74,10 +74,10 @@
                    (for-each
                     (lambda (i)
                       (:= manager.slots.i.full? #f)
-                      (if (fx< (fx+ i 1) capacity)
+                      (if (fx< (fx1+ i) capacity)
                           (begin
                             (:= manager.slots.i.data.free.exists? 1)
-                            (:= manager.slots.i.data.free.next (fx+ i 1)))
+                            (:= manager.slots.i.data.free.next (fx1+ i)))
                           (:= manager.slots.i.data.free.exists? 0)))
                     (iota capacity))
                    (:= manager.free-top.exists? 1)
@@ -99,7 +99,7 @@
                          (::= &manager.slots.slot.data.full.data actor)
                          (:= manager.slots.slot.data.full.generation
                              generation)
-                         (:= manager.size (fx+ manager.size 1))
+                         (:= manager.size (fx1+ manager.size))
                          index)
                        (raise "no free top"))))
                (define (actor-manager-index-at manager i)
@@ -118,23 +118,22 @@
                              (begin
                                (:= manager.slots.index.full? #f)
                                (:= manager.slots.index.data.free.generation
-                                   (fx+ generation 1))
+                                   (fx1+ generation))
                                (:= manager.slots.index.data.free.exists?
                                    manager.free-top.exists?)
                                (:= manager.slots.index.data.free.next
                                    manager.free-top.next)
                                (:= manager.free-top.exists? 1)
                                (:= manager.free-top.next index)
-                               (:= manager.size (fx- manager.size 1)))
+                               (:= manager.size (fx1- manager.size)))
                              (raise "different generation"))
                          (raise "slot is free")))))
                (define (actor-manager-for-each f manager)
                  (with-ftypes ([actor-manager-type manager])
-                   (do ([i 0 (fx+ i 1)])
-                       ((fx>= i manager.size))
+                   (do ([i 0 (fx1+ i)])
+                       ((fx>= i capacity))
                      (when manager.slots.i.full?
                        (f i &manager.slots.i.data.full.data))))))))])))
-
 
 ;; Local Variables:
 ;; eval: (put 'meta 'scheme-indent-function 2)

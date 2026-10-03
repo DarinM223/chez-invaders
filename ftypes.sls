@@ -20,39 +20,45 @@
           (let* ([name (symbol->string (syntax->datum #'id))]
                  [parts (split-string-at-dot name)]
                  [symbols (map (lambda (part)
-                                 (or (string->number part) (string->symbol part)))
+                                 (or (string->number part)
+                                     (string->symbol part)))
                                parts)])
             (map (lambda (sym) (datum->syntax #'id sym)) symbols))]
       [_ (syntax-error #'id "expected an identifier")]))
 
   (meta define (contains-dot? stx)
     (syntax-case stx ()
-      (id (identifier? #'id)
+      [id (identifier? #'id)
           (let* ([name (symbol->string (syntax->datum #'id))]
                  [parts (split-string-at-dot name)])
-            (> (length parts) 1)))))
+            (fx> (length parts) 1))]
+      [_ (syntax-error #'id "expected an identifier")]))
 
   (meta define (is-reference? stx)
     (syntax-case stx ()
-      (id (identifier? #'id)
+      [id (identifier? #'id)
           (let* ([name (symbol->string (syntax->datum #'id))])
-            (and (fx> (string-length name) 1) (char=? (string-ref name 0) #\&))))))
+            (and (fx> (string-length name) 1)
+                 (char=? (string-ref name 0) #\&)))]
+      [_ (syntax-error #'id "expected an identifier")]))
 
   (meta define (remove-reference stx)
     (syntax-case stx ()
-      (id (identifier? #'id)
+      [id (identifier? #'id)
           (let* ([name (symbol->string (syntax->datum #'id))])
             (datum->syntax #'id
                            (string->symbol
-                            (list->string (cdr (string->list name)))))))))
+                            (list->string (cdr (string->list name))))))]
+      [_ (syntax-error #'id "expected an identifier")]))
 
   (meta define (head-identifier stx)
     (syntax-case stx ()
-      (id (identifier? #'id)
+      [id (identifier? #'id)
           (let* ([name (symbol->string (syntax->datum #'id))]
                  [parts (split-string-at-dot name)]
                  [symbols (map string->symbol parts)])
-            (datum->syntax #'id (car symbols))))))
+            (datum->syntax #'id (car symbols)))]
+      [_ (syntax-error #'id "expected an identifier")]))
 
   (meta define (lookup-identifier id env)
     (cond
@@ -101,16 +107,14 @@
       [(op id value) (and (identifier? #'op)
                           (literal-identifier=? #'op
                                                 (datum->syntax #'op '::=)))
-       (begin
-         (with-syntax ([type (or (lookup-identifier #'id env)
-                                 (lookup-identifier #'value env))]
-                       [parsed-head (parse-body #'id env)]
-                       [parsed-value (parse-body #'value env)])
-           #'(ftype-copy-fields! type
-                                 parsed-head
-                                 parsed-value)))]
+       (with-syntax ([type (or (lookup-identifier #'id env)
+                               (lookup-identifier #'value env))]
+                     [parsed-head (parse-body #'id env)]
+                     [parsed-value (parse-body #'value env)])
+         #'(ftype-copy-fields! type parsed-head parsed-value))]
       [(op id value) (and (identifier? #'op)
-                          (literal-identifier=? #'op (datum->syntax #'op ':=))
+                          (literal-identifier=? #'op
+                                                (datum->syntax #'op ':=))
                           (identifier? #'id)
                           (contains-dot? #'id)
                           (lookup-identifier (head-identifier #'id) env))
@@ -125,7 +129,8 @@
                 (head-identifier (remove-reference #'id)) env))
           (with-syntax ([head (head-identifier (remove-reference #'id))])
             (with-syntax ([type (lookup-identifier #'head env)]
-                          [(fields ...) (cdr (split-identifier (remove-reference #'id)))])
+                          [(fields ...)
+                           (cdr (split-identifier (remove-reference #'id)))])
               #'(ftype-&ref type (fields ...) head)))]
       [id (and (identifier? #'id)
                (contains-dot? #'id)
@@ -147,12 +152,14 @@
                    (lambda (acc form)
                      (syntax-case form ()
                        [(type ids ...)
-                        (fold-left (lambda (acc id) (cons (list id #'type) acc))
+                        (fold-left (lambda (acc id)
+                                     (cons (list id #'type) acc))
                                    acc #'(ids ...))]))
                    '()
                    #'(form ...))])
          (with-syntax ([(body ...)
-                        (map (lambda (body) (parse-body body env)) #'(body ...))])
+                        (map (lambda (body) (parse-body body env))
+                             #'(body ...))])
            #'(begin body ...)))]))
 
   (define-syntax (define-with-ftypes stx)

@@ -2,35 +2,9 @@
         (raylib raymath)
         (raylib intercept-alloc)
         (raylib raylib (0 3))
+        (utils)
         (ftypes)
         (generational))
-
-(define-syntax define-toplevel
-  (lambda (stx)
-    (syntax-case stx ()
-      [(_ id value) (identifier? #'id)
-       #'(unless (top-level-bound? (quote id))
-           (define-top-level-value (quote id) value))])))
-
-(define-syntax (alloc-struct stx)
-  (syntax-case stx ()
-    [(_ ftype)
-     #'(make-ftype-pointer ftype (foreign-alloc (ftype-sizeof ftype)))]))
-
-(define-syntax (print-ftype-fields stx)
-  (syntax-case stx ()
-    [(_ ftype-id)
-     #'(let* ([dummy-ptr (make-ftype-pointer ftype-id 0)]
-              [struct-sexpr (ftype-pointer->sexpr dummy-ptr)])
-         (map car (cdr struct-sexpr)))]))
-
-(define (safe-call thunk)
-  (guard (condition
-          [else
-           (display "[Scheme Error]: ")
-           (display-condition condition)
-           (newline)])
-    (thunk)))
 
 (define-ftype ShipEnemy
   (struct
@@ -53,6 +27,8 @@
 (define-toplevel ship-y 60.0)
 (define-toplevel ship-angle 0.)
 (define-toplevel ship-velocity 0.2)
+(define-toplevel ship-scale 2.)
+(define-toplevel game-over? #f)
 (define-toplevel enemies (foreign-alloc (ftype-sizeof ShipEnemy-manager)))
 (define-toplevel bullets (foreign-alloc (ftype-sizeof Bullet-manager)))
 
@@ -101,7 +77,7 @@
                             ship-x ship-y ship-scale ship-rad)
   (let ([bullet (make-vector-2 bullet-x bullet-y)]
         [collides #f])
-    (spaceship-triangles-cont ship-x ship-y ship-rad
+    (spaceship-triangles-cont ship-x ship-y ship-scale ship-rad
      (lambda (a b c)
        (set! collides
              (or collides (check-collision-point-triangle bullet a b c)))))
@@ -156,6 +132,7 @@
   (eval-when (compile) (optimize-level 2))
   (define curr-time (get-time))
   (define dt (fl* (get-frame-time) 1000.))
+  (define enemies (get-enemies))
   (define bullets (get-bullets))
   (with-auto-free
    (for-each drop-rectangle rectangles)
@@ -172,7 +149,20 @@
    (handle-keys dt)
    (keep-in-bounds ship-x ship-y)
    (Bullet-manager-for-each
-    (lambda (bullet-idx bullet) (bullet-update bullets bullet-idx bullet dt))
+    (lambda-ftypes (bullet-idx [Bullet bullet])
+      (when (spaceship-collides bullet.position.x bullet.position.y
+                                ship-x ship-y ship-scale ship-angle)
+        (set! game-over? #t))
+      (ShipEnemy-manager-for-each
+       (lambda-ftypes (enemy-idx [ShipEnemy enemy])
+         (let ([enemy-gen-idx
+                (ShipEnemy-manager-index-at enemies enemy-idx)])
+           (when (spaceship-collides bullet.position.x bullet.position.y
+                                     enemy.position.x enemy.position.y
+                                     ship-scale enemy.angle)
+             (ShipEnemy-manager-remove! enemies enemy-gen-idx))))
+       enemies)
+      (bullet-update bullets bullet-idx bullet dt))
     bullets)))
 
 (define (user-game-draw)
@@ -185,14 +175,20 @@
   (with-ftypes [(ShipEnemy-manager enemies)
                 (Bullet-manager bullets)]
     (with-auto-free
+     (when game-over?
+       (draw-text "GAME OVER"
+                  (fx- (fx/ (get-screen-width) 2) 120)
+                  (fx- (fx/ (get-screen-height) 2) 20)
+                  40 WHITE))
+
      (clear-background BLACK)
      (for-each (lambda (rect) (draw-rectangle-rec rect BLUE)) rectangles)
-     (spaceship-draw ship-x ship-y 2. ship-angle WHITE)
+     (spaceship-draw ship-x ship-y ship-scale ship-angle WHITE)
      (ShipEnemy-manager-for-each
       (lambda-ftypes (enemy-idx [ShipEnemy enemy])
         (define enemy-gen-idx (ShipEnemy-manager-index-at enemies enemy-idx))
         (spaceship-draw enemy.position.x enemy.position.y
-                        2. enemy.angle WHITE))
+                        ship-scale enemy.angle WHITE))
       enemies)
      (Bullet-manager-for-each 
       (lambda-ftypes (bullet-idx [Bullet bullet])
