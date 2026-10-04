@@ -109,22 +109,33 @@
     (when (fl<= ship-y 0.) (set! ship-y 0.))
     (when (fl>= ship-y height) (set! ship-y height))))
 
+(define (populate-enemies enemies rows cols)
+  (define ship-width (fl* ship-scale 12.))
+  (define ship-width-plus-pad (fl+ ship-width 12.))
+  (define col-size (fl* ship-width-plus-pad (exact->inexact cols)))
+  (define start-x (fl- (fl/ (exact->inexact (get-screen-width)) 2.) (fl/ col-size 2.)))
+  (with-auto-free
+   (let loop ([x start-x] [y 60.] [row 0] [col 0])
+     (unless (fx>= row rows)
+       (if (fx>= col cols)
+           (loop start-x (fl+ y 40.) (fx1+ row) 0)
+           (let ([enemy (alloc-struct ShipEnemy)])
+             (with-ftypes ([ShipEnemy enemy])
+               (:= enemy.position.x x)
+               (:= enemy.position.y y)
+               (:= enemy.angle PI)
+               (ShipEnemy-manager-add! enemies enemy)
+               (loop (fl+ x ship-width-plus-pad) y row (fx1+ col)))))))))
+
 (define (user-game-init)
   (define enemies (get-enemies))
+  (define bullets (get-bullets))
   (display "Game logic initialized!\n")
   (set! ship-x (fl/ (exact->inexact (get-screen-width)) 2.))
   (set! ship-y (fl- (fl+ (exact->inexact (get-screen-height))) 20.))
-  (ShipEnemy-manager-init! (get-enemies))
-  (Bullet-manager-init! (get-bullets))
-  (with-auto-free
-   (do ([x 60. (fl+ x 40.)])
-       ((fl>= x (exact->inexact (get-screen-width))))
-     (let ([enemy (alloc-struct ShipEnemy)])
-       (with-ftypes ([ShipEnemy enemy])
-         (:= enemy.position.x x)
-         (:= enemy.position.y 60.)
-         (:= enemy.angle PI)
-         (ShipEnemy-manager-add! enemies enemy))))))
+  (ShipEnemy-manager-init! enemies)
+  (Bullet-manager-init! bullets)
+  (populate-enemies enemies 3 5))
 
 (define last-fire-time (get-time))
 
@@ -150,19 +161,22 @@
    (keep-in-bounds ship-x ship-y)
    (Bullet-manager-for-each
     (lambda-ftypes (bullet-idx [Bullet bullet])
+      (define collided? #f)
       (when (spaceship-collides bullet.position.x bullet.position.y
                                 ship-x ship-y ship-scale ship-angle)
         (set! game-over? #t))
       (ShipEnemy-manager-for-each
        (lambda-ftypes (enemy-idx [ShipEnemy enemy])
-         (let ([enemy-gen-idx
-                (ShipEnemy-manager-index-at enemies enemy-idx)])
-           (when (spaceship-collides bullet.position.x bullet.position.y
-                                     enemy.position.x enemy.position.y
-                                     ship-scale enemy.angle)
-             (ShipEnemy-manager-remove! enemies enemy-gen-idx))))
+         (when (spaceship-collides bullet.position.x bullet.position.y
+                                   enemy.position.x enemy.position.y
+                                   ship-scale enemy.angle)
+           (set! collided? #t)
+           (ShipEnemy-manager-remove! enemies
+                                      (ShipEnemy-manager-index-at enemies enemy-idx))))
        enemies)
-      (bullet-update bullets bullet-idx bullet dt))
+      (if collided?
+        (Bullet-manager-remove! bullets (Bullet-manager-index-at bullets bullet-idx))
+        (bullet-update bullets bullet-idx bullet dt)))
     bullets)))
 
 (define (user-game-draw)
@@ -175,15 +189,14 @@
   (with-ftypes [(ShipEnemy-manager enemies)
                 (Bullet-manager bullets)]
     (with-auto-free
-     (when game-over?
-       (draw-text "GAME OVER"
-                  (fx- (fx/ (get-screen-width) 2) 120)
-                  (fx- (fx/ (get-screen-height) 2) 20)
-                  40 WHITE))
-
      (clear-background BLACK)
      (for-each (lambda (rect) (draw-rectangle-rec rect BLUE)) rectangles)
-     (spaceship-draw ship-x ship-y ship-scale ship-angle WHITE)
+     (if game-over?
+         (draw-text "GAME OVER"
+                    (fx- (fx/ (get-screen-width) 2) 120)
+                    (fx- (fx/ (get-screen-height) 2) 20)
+                    40 WHITE)
+         (spaceship-draw ship-x ship-y ship-scale ship-angle WHITE))
      (ShipEnemy-manager-for-each
       (lambda-ftypes (enemy-idx [ShipEnemy enemy])
         (define enemy-gen-idx (ShipEnemy-manager-index-at enemies enemy-idx))
