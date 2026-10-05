@@ -4,6 +4,7 @@
         (raylib raylib (0 3))
         (utils)
         (ftypes)
+        (arena)
         (generational))
 
 (define-ftype ShipEnemy
@@ -19,6 +20,7 @@
 (define-generational ShipEnemy 100)
 (define-generational Bullet 100)
 
+(define-toplevel arena (make-arena 1000))
 (define-toplevel rectangles
   (list
    (make-rectangle 50.0 50.0 100.0 100.0)
@@ -145,6 +147,7 @@
   (define dt (fl* (get-frame-time) 1000.))
   (define enemies (get-enemies))
   (define bullets (get-bullets))
+  (arena-reset arena)
   (with-auto-free
    (for-each drop-rectangle rectangles)
    (when (and (is-key-down KEY_SPACE)

@@ -1,5 +1,5 @@
 (library (intercept-alloc)
-  (export foreign-alloc with-auto-free)
+  (export foreign-alloc with-auto-free with-custom-alloc)
   (import (prefix (chezscheme) cs:)
           (except (chezscheme) foreign-alloc))
   (define current-allocator (make-parameter cs:foreign-alloc))
@@ -20,4 +20,9 @@
                                  (set! alloc-list (cons ptr alloc-list))
                                  ptr))])
                body ...))
-           (lambda () (for-each foreign-free alloc-list))))])))
+           (lambda () (for-each foreign-free alloc-list))))]))
+  (define-syntax with-custom-alloc
+    (syntax-rules ()
+      [(_ alloc body ...)
+       (parameterize ([current-allocator alloc])
+         body ...)])))

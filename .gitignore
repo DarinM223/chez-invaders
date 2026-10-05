@@ -10,6 +10,7 @@ compile_commands.json
 /boot.so
 /intercept-alloc.so
 /utils.so
+/arena.so
 Makefile
 /raylib/*.so
 /chez-raylib/*.so
