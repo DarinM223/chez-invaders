@@ -11,6 +11,7 @@ compile_commands.json
 /intercept-alloc.so
 /utils.so
 /arena.so
+/coroutine.so
 Makefile
 /raylib/*.so
 /chez-raylib/*.so
