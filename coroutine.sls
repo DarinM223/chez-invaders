@@ -1,10 +1,11 @@
 (library (coroutine)
-  (export yield create-task fork-task step)
-  (import (chezscheme))
+  (export yield create-task create-task! fork-task step)
+  (import (chezscheme) (utils))
 
-  (define yield-to-scheduler
+  (define yield-to-scheduler0
     (lambda (resume-task)
       (error 'yield-to-scheduler "yield-to-scheduler not defined")))
+  (define yield-to-scheduler yield-to-scheduler0)
 
   (define-record-type task
     (fields
@@ -24,6 +25,11 @@
                  (thunk)
                  (yield-to-scheduler #f))
                #f))
+
+  (define-syntax (create-task! stx)
+    (syntax-case stx ()
+      [(_ name body* ...)
+       #'(create-task name (lambda () (safe-call (lambda () body* ...))))]))
 
   (define (fork-task name thunk tasks)
     (set! tasks (cons (create-task name thunk) tasks)))

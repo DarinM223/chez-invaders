@@ -26,7 +26,15 @@
       (co:yield)
       (loop (get-time)))))
 
-(define (move-to start-x start-y end-x end-y speed setter)
+;; use barycentric coordinates (1-t,t) to
+;; interpolate over a line:
+;; x(t) = a_x + t * (b_x - a_x)
+;; y(t) = a_y + t * (b_y - a_y)
+(define (lerp start end t)
+  (fl+ (fl* start (fl- 1. t)) (fl* end t)))
+
+(define (move-to start-x start-y end-x end-y speed
+                 interpolate-x interpolate-y setter)
   (define start-time (fl* (get-time) 1000.))
   ;; dx/dt = speed -> dt = dx / speed
   (define distance
@@ -36,18 +44,60 @@
   (let loop ([curr-time (fl* (get-time) 1000.)])
     (let ([t (flmin 1. (fl/ (fl- curr-time start-time) end-time))])
       (unless (fl< (flabs (fl- t 1.)) 0.001)
-        ;; barycentric coordinates:
-        ;; x(t) = a_x + t * (b_x - a_x)
-        ;; y(t) = a_y + t * (b_y - a_y)
-        (let ([x (fl+ start-x (fl* t (fl- end-x start-x)))]
-              [y (fl+ start-y (fl* t (fl- end-y start-y)))])
+        (let ([x (interpolate-x start-x end-x t)]
+              [y (interpolate-y start-y end-y t)])
           (setter x y)
           (co:yield)
           (loop (fl* (get-time) 1000.)))))))
 
+(define (line-to start-x start-y end-x end-y speed setter)
+  (move-to start-x start-y end-x end-y speed lerp lerp setter))
+
+(define (quad-bezier-to start-x start-y end-x end-y
+                        control-x control-y speed setter)
+  (define (bezier-x start end t)
+    (lerp (lerp start control-x t) (lerp control-x end t) t))
+  (define (bezier-y start end t)
+    (lerp (lerp start control-y t) (lerp control-y end t) t))
+  (move-to start-x start-y end-x end-y speed bezier-x bezier-y setter))
+
+;; De Casteljau's algorithm for obtaining bezier curve through
+;; repeated linear interpolations.
+(define (cubic-bezier-to start-x start-y end-x end-y
+                         control1-x control1-y control2-x control2-y
+                         speed setter)
+  (define (bezier-x start end t)
+    (let* ([q0 (lerp start control1-x t)]
+           [q1 (lerp control1-x control2-x t)]
+           [q2 (lerp control2-x end t)]
+           [r0 (lerp q0 q1 t)]
+           [r1 (lerp q1 q2 t)])
+      (lerp r0 r1 t)))
+  (define (bezier-y start end t)
+    (let* ([q0 (lerp start control1-y t)]
+           [q1 (lerp control1-y control2-y t)]
+           [q2 (lerp control2-y end t)]
+           [r0 (lerp q0 q1 t)]
+           [r1 (lerp q1 q2 t)])
+      (lerp r0 r1 t)))
+  (move-to start-x start-y end-x end-y speed bezier-x bezier-y setter))
+
 (define-with-ftypes (move-rectangle [Rectangle rect] end-x end-y speed)
-  (move-to rect.x rect.y end-x end-y speed
+  (line-to rect.x rect.y end-x end-y speed
            (lambda (x y) (:= rect.x x) (:= rect.y y))))
+
+(define-with-ftypes (curve-rectangle [Rectangle rect] end-x end-y
+                                     control-x control-y speed)
+  (quad-bezier-to rect.x rect.y end-x end-y control-x control-y speed
+                  (lambda (x y) (:= rect.x x) (:= rect.y y))))
+
+(define-with-ftypes (curve2-rectangle [Rectangle rect] end-x end-y
+                                     control1-x control1-y
+                                     control2-x control2-y
+                                     speed)
+  (cubic-bezier-to rect.x rect.y end-x end-y
+                   control1-x control1-y control2-x control2-y speed
+                   (lambda (x y) (:= rect.x x) (:= rect.y y))))
 
 (define-generational ShipEnemy 100)
 (define-generational Bullet 100)
@@ -55,23 +105,19 @@
 (define-toplevel arena (make-arena 1000))
 (define-toplevel rect1 (make-rectangle 50.0 50.0 100.0 100.0))
 (define-toplevel rect2 (make-rectangle 100.0 100.0 100.0 100.0))
-(define task1
-  (co:create-task
-   "move-rect1"
-   (lambda ()
-     (move-rectangle rect1 300. 300. .5)
-     (wait 1.)
-     (move-rectangle rect1 300. 0. .5)
-     (move-rectangle rect1 0. 0. .5))))
-(define task2
-  (co:create-task
-   "move-rect2"
-   (lambda ()
-     (move-rectangle rect2 500. 300. .63)
-     (wait 1.)
-     (move-rectangle rect2 500. 0. .5)
-     (move-rectangle rect2 0. 0. .5))))
-(define tasks (list task1 task2))
+(define-toplevel task1
+  (co:create-task! "move-rect1"
+   (move-rectangle rect1 300. 300. .5)
+   (wait 1.)
+   (move-rectangle rect1 300. 0. .5)
+   (curve2-rectangle rect1 0. 0. 200. 400. 100. 200. .5)))
+(define-toplevel task2
+  (co:create-task! "move-rect2"
+   (move-rectangle rect2 500. 300. .63)
+   (wait 1.)
+   (move-rectangle rect2 500. 0. .5)
+   (curve-rectangle rect2 0. 0. 300. 300. .5)))
+(define-toplevel tasks (list task1 task2))
 (define-toplevel rectangles (list rect1 rect2))
 (define-toplevel ship-x 100.0)
 (define-toplevel ship-y 60.0)
