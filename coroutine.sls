@@ -1,6 +1,14 @@
 (library (coroutine)
-  (export yield create-task create-task! fork-task step)
-  (import (chezscheme) (utils))
+  (export yield
+          create-task
+          create-task!
+          fork-task
+          step
+          create-wait-group
+          wait-group-incr
+          wait-group-wait
+          wait-group-done)
+  (import (chezscheme) (only (utils) safe-call) (match))
 
   (define yield-to-scheduler0
     (lambda (resume-task)
@@ -11,11 +19,40 @@
     (fields
      name
      (mutable k)
-     (mutable dead?)))
+     (mutable state)))
+
+  (define-record-type wait-group
+    (fields
+     (mutable count)
+     (mutable waiters)))
+
+  (define create-wait-group
+    (case-lambda
+      [() (make-wait-group 0 '())]
+      [(count) (make-wait-group count '())]))
+
+  (define (wait-group-incr group)
+    (wait-group-count-set! group (fx1+ (wait-group-count group))))
+
+  (define (wait-group-wait group)
+    (define resume-scheduler
+      (call/1cc (lambda (resume-task)
+                  (yield-to-scheduler `(wait ,group ,resume-task)))))
+    (set! yield-to-scheduler resume-scheduler))
+
+  (define (wait-group-done group)
+    (wait-group-count-set! group (fx1- (wait-group-count group)))
+    (when (fx= (wait-group-count group) 0)
+      ;; Wake up waiters when the count is finished.
+      (for-each
+       (lambda (task) (task-state-set! task 'running))
+       (wait-group-waiters group))
+      (wait-group-waiters-set! group '())))
 
   (define (yield)
     (define resume-scheduler
-      (call/1cc (lambda (resume-task) (yield-to-scheduler resume-task))))
+      (call/1cc (lambda (resume-task)
+                  (yield-to-scheduler `(yield ,resume-task)))))
     (set! yield-to-scheduler resume-scheduler))
 
   (define (create-task name thunk)
@@ -24,7 +61,7 @@
                  (set! yield-to-scheduler resume-scheduler)
                  (thunk)
                  (yield-to-scheduler #f))
-               #f))
+               'running))
 
   (define-syntax (create-task! stx)
     (syntax-case stx ()
@@ -36,15 +73,20 @@
 
   (define (step tasks)
     (define (handle-task task)
-      (unless (task-dead? task)
+      (when (eq? (task-state task) 'running)
         (let ([resume-task
                (call/1cc (lambda (resume-scheduler)
                            ((task-k task) resume-scheduler)))])
-          (if (procedure? resume-task)
-              (task-k-set! task resume-task)
-              (task-dead?-set! task #t)))))
+          (match resume-task
+            [(yield ,k) (task-k-set! task k)]
+            [(wait ,group ,k)
+             (wait-group-waiters-set! group
+                                      (cons task (wait-group-waiters group)))
+             (task-k-set! task k)
+             (task-state-set! task 'blocked)]
+            [#f (task-state-set! task 'dead)]))))
     (for-each handle-task tasks)
-    (filter (lambda (task) (not (task-dead? task))) tasks)))
+    (filter (lambda (task) (not (eq? (task-state task) 'dead))) tasks)))
 
 ;; (module test ()
 ;;   (import (prefix (coroutine) co:))

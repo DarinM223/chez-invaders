@@ -12,6 +12,7 @@ compile_commands.json
 /utils.so
 /arena.so
 /coroutine.so
+/match.so
 Makefile
 /raylib/*.so
 /chez-raylib/*.so

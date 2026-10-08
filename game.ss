@@ -40,9 +40,9 @@
   (define distance
     (sqrt (fl+ (flexpt (fl- end-x start-x) 2.)
                (flexpt (fl- end-y start-y) 2.))))
-  (define end-time (fl+ start-time (fl/ distance speed)))
+  (define duration (fl/ distance speed))
   (let loop ([curr-time (fl* (get-time) 1000.)])
-    (let ([t (flmin 1. (fl/ (fl- curr-time start-time) end-time))])
+    (let ([t (flmin 1. (fl/ (fl- curr-time start-time) duration))])
       (unless (fl< (flabs (fl- t 1.)) 0.001)
         (let ([x (interpolate-x start-x end-x t)]
               [y (interpolate-y start-y end-y t)])
@@ -102,22 +102,25 @@
 (define-generational ShipEnemy 100)
 (define-generational Bullet 100)
 
+(define-toplevel tasks '())
+(define-syntax (push-task! stx)
+  (syntax-case stx ()
+    [(_ name body* ...) (identifier? #'name)
+     (with-syntax ([name-str
+                    (datum->syntax #'name
+                                   (symbol->string (syntax->datum #'name)))])
+       #'(set! tasks (cons (co:create-task! name-str body* ...) tasks)))]
+    [(_ body* ...)
+     (with-syntax ([task
+                    (datum->syntax
+                     #'here
+                     (string-append "task-" (symbol->string (gensym))))])
+       #'(set! tasks (cons (co:create-task! task body* ...) tasks)))]))
+
 (define-toplevel arena (make-arena 1000))
 (define-toplevel rect1 (make-rectangle 50.0 50.0 100.0 100.0))
 (define-toplevel rect2 (make-rectangle 100.0 100.0 100.0 100.0))
-(define-toplevel task1
-  (co:create-task! "move-rect1"
-   (move-rectangle rect1 300. 300. .5)
-   (wait 1.)
-   (move-rectangle rect1 300. 0. .5)
-   (curve2-rectangle rect1 0. 0. 200. 400. 100. 200. .5)))
-(define-toplevel task2
-  (co:create-task! "move-rect2"
-   (move-rectangle rect2 500. 300. .63)
-   (wait 1.)
-   (move-rectangle rect2 500. 0. .5)
-   (curve-rectangle rect2 0. 0. 300. 300. .5)))
-(define-toplevel tasks (list task1 task2))
+
 (define-toplevel rectangles (list rect1 rect2))
 (define-toplevel ship-x 100.0)
 (define-toplevel ship-y 60.0)
@@ -226,12 +229,27 @@
 (define (user-game-init)
   (define enemies (get-enemies))
   (define bullets (get-bullets))
+  (define wait-group (co:create-wait-group 2))
   (display "Game logic initialized!\n")
   (set! ship-x (fl/ (exact->inexact (get-screen-width)) 2.))
   (set! ship-y (fl- (fl+ (exact->inexact (get-screen-height))) 20.))
   (ShipEnemy-manager-init! enemies)
   (Bullet-manager-init! bullets)
-  (populate-enemies enemies 3 5))
+  (populate-enemies enemies 3 5)
+  (push-task! move-rect1
+              (move-rectangle rect1 300. 300. .2)
+              (wait 1.)
+              (move-rectangle rect1 300. 0. .2)
+              (curve2-rectangle rect1 0. 0. 200. 400. 100. 200. .2)
+              (co:wait-group-done wait-group))
+  (push-task! move-rect2
+              (move-rectangle rect2 500. 300. .25)
+              (wait 1.)
+              (move-rectangle rect2 500. 0. .2)
+              (curve-rectangle rect2 0. 0. 300. 300. .2)
+              (co:wait-group-done wait-group))
+  (push-task! (co:wait-group-wait wait-group)
+              (set! game-over? #t)))
 
 (define last-fire-time (get-time))
 
@@ -244,19 +262,19 @@
   (arena-reset arena)
   (with-auto-free
    (set! tasks (co:step tasks))
-   ;; (for-each drop-rectangle rectangles)
-   (when (and (is-key-down KEY_SPACE)
-              (fl> (fl- curr-time last-fire-time) .3))
-     (set! last-fire-time curr-time)
-     (let ([bullet (alloc-struct Bullet)])
-       (with-ftypes ([Bullet bullet])
-         (:= bullet.position.x ship-x)
-         (:= bullet.position.y (fl- ship-y 40.))
-         (:= bullet.velocity.x 0.)
-         (:= bullet.velocity.y (fl- 0.5))
-         (Bullet-manager-add! bullets bullet))))
-   (handle-keys dt)
-   (keep-in-bounds ship-x ship-y)
+   (unless game-over?
+     (when (and (is-key-down KEY_SPACE)
+                (fl> (fl- curr-time last-fire-time) .3))
+       (set! last-fire-time curr-time)
+       (let ([bullet (alloc-struct Bullet)])
+         (with-ftypes ([Bullet bullet])
+           (:= bullet.position.x ship-x)
+           (:= bullet.position.y (fl- ship-y 40.))
+           (:= bullet.velocity.x 0.)
+           (:= bullet.velocity.y (fl- 0.5))
+           (Bullet-manager-add! bullets bullet))))
+     (handle-keys dt)
+     (keep-in-bounds ship-x ship-y))
    (Bullet-manager-for-each
     (lambda-ftypes (bullet-idx [Bullet bullet])
       (define collided? #f)
@@ -297,7 +315,6 @@
          (spaceship-draw ship-x ship-y ship-scale ship-angle WHITE))
      (ShipEnemy-manager-for-each
       (lambda-ftypes (enemy-idx [ShipEnemy enemy])
-        (define enemy-gen-idx (ShipEnemy-manager-index-at enemies enemy-idx))
         (spaceship-draw enemy.position.x enemy.position.y
                         ship-scale enemy.angle WHITE))
       enemies)
