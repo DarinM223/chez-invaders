@@ -36,14 +36,20 @@
                        [actor-manager-index-at
                         (syntax-append #'actor-manager-type "-index-at")]
                        [actor-manager-for-each
-                        (syntax-append #'actor-manager-type "-for-each")])
+                        (syntax-append #'actor-manager-type "-for-each")]
+                       [actor-manager-get
+                        (syntax-append #'actor-manager-type "-get")]
+                       [actor-manager-size
+                        (syntax-append #'actor-manager-type "-size")])
            #'(module
                  (export actor-manager-type
                          actor-manager-init
                          actor-manager-add
                          actor-manager-remove
                          actor-manager-index-at
-                         actor-manager-for-each)
+                         actor-manager-for-each
+                         actor-manager-get
+                         actor-manager-size)
                (import (chezscheme) (ftypes))
 
                (define-record actor-index-type
@@ -133,7 +139,18 @@
                    (do ([i 0 (fx1+ i)])
                        ((fx>= i capacity))
                      (when manager.slots.i.full?
-                       (f i &manager.slots.i.data.full.data))))))))])))
+                       (f i &manager.slots.i.data.full.data)))))
+               (define (actor-manager-get manager index)
+                 (with-ftypes ([actor-manager-type manager])
+                   (let ([index (actor-index-index index)]
+                         [generation (actor-index-generation index)])
+                     (and manager.slots.index.full?
+                          (fx= manager.slots.index.data.full.generation
+                               generation)
+                          &manager.slots.index.data.full.data))))
+               (define (actor-manager-size manager)
+                 (with-ftypes ([actor-manager-type manager])
+                   manager.size)))))])))
 
 ;; Local Variables:
 ;; eval: (put 'meta 'scheme-indent-function 2)

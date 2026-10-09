@@ -7,15 +7,29 @@
         (arena)
         (generational))
 
+(define game-rng (make-pseudo-random-generator))
+(let* ([t (current-time)]
+       [seed-val (+ (time-second t) (time-nanosecond t))])
+  (pseudo-random-generator-seed! game-rng (+ 1 (modulo seed-val (- (expt 2 32) 1)))))
+
+(define SHIP-ENEMY-NORMAL 0)
+(define SHIP-ENEMY-STRAFING 1)
+
 (define-ftype ShipEnemy
   (struct
     [position Vector-2]
-    [angle double]))
+    [angle double]
+    [state integer-8]))
 
 (define-ftype Bullet
   (struct
     [position Vector-2]
     [velocity Vector-2]))
+
+(define-generational ShipEnemy 100)
+(define-generational Bullet 100)
+
+(define-toplevel *shipenemy-tasks* (make-eqv-hashtable))
 
 (import (prefix (coroutine) co:))
 
@@ -99,8 +113,24 @@
                    control1-x control1-y control2-x control2-y speed
                    (lambda (x y) (:= rect.x x) (:= rect.y y))))
 
-(define-generational ShipEnemy 100)
-(define-generational Bullet 100)
+(define-with-ftypes (ShipEnemy-move [ShipEnemy enemy] end-x end-y speed)
+  (line-to enemy.position.x enemy.position.y end-x end-y speed
+           (lambda (x y) (:= enemy.position.x x) (:= enemy.position.y y))))
+
+(define-with-ftypes (ShipEnemy-curve [ShipEnemy enemy]
+                                     end-x end-y control-x control-y speed)
+  (with-ftypes ([ShipEnemy enemy])
+    (quad-bezier-to enemy.position.x enemy.position.y
+                    end-x end-y control-x control-y speed
+                    (lambda (x y) (:= enemy.position.x x) (:= enemy.position.y y)))))
+
+(define-with-ftypes (ShipEnemy-curve2 [ShipEnemy enemy] end-x end-y
+                                      control1-x control1-y
+                                      control2-x control2-y
+                                      speed)
+  (cubic-bezier-to enemy.position.x enemy.position.y end-x end-y
+                   control1-x control1-y control2-x control2-y speed
+                   (lambda (x y) (:= enemy.position.x x) (:= enemy.position.y y))))
 
 (define-toplevel tasks '())
 (define-syntax (push-task! stx)
@@ -122,6 +152,7 @@
 (define-toplevel rect2 (make-rectangle 100.0 100.0 100.0 100.0))
 
 (define-toplevel rectangles (list rect1 rect2))
+(define-toplevel ship-color WHITE)
 (define-toplevel ship-x 100.0)
 (define-toplevel ship-y 60.0)
 (define-toplevel ship-angle 0.)
@@ -148,6 +179,7 @@
 (define (draw-triangle-fixed v1 v2 v3 color)
   (let* ([edge1 (vector-2-subtract v2 v1)]
          [edge2 (vector-2-subtract v3 v1)]
+
          [cross-z (vector-2-cross-product edge1 edge2)])
     (if (fl> cross-z 0.0)
         (draw-triangle v1 v3 v2 color)
@@ -223,8 +255,39 @@
                (:= enemy.position.x x)
                (:= enemy.position.y y)
                (:= enemy.angle PI)
+               (:= enemy.state SHIP-ENEMY-NORMAL)
                (ShipEnemy-manager-add! enemies enemy)
                (loop (fl+ x ship-width-plus-pad) y row (fx1+ col)))))))))
+
+(define-with-ftypes (ShipEnemy-normal-x [ShipEnemy enemy] curr-time)
+  (if (fx= enemy.state SHIP-ENEMY-NORMAL)
+      (fl+ enemy.position.x (fl* (flsin curr-time) 10.))
+      enemy.position.x))
+
+(define-with-ftypes (shipenemy-task [ShipEnemy enemy] time)
+  (let* ([saved-position-x enemy.position.x]
+         [saved-position-y enemy.position.y]
+         [curr-position-x (ShipEnemy-normal-x enemy time)]
+         [control-x (if (fl< saved-position-x
+                             (fl/ (exact->inexact (get-screen-width)) 2.))
+                        0.
+                        (exact->inexact (get-screen-width)))]
+         [control-y (fl/ (exact->inexact (get-screen-height)) 3.)])
+    (:= enemy.state SHIP-ENEMY-STRAFING)
+    (ShipEnemy-curve enemy
+                     curr-position-x
+                     (fl+ (exact->inexact (get-screen-height)) 60.)
+                     control-x control-y
+                     .1)
+    (ShipEnemy-curve enemy
+                     saved-position-x saved-position-y
+                     (if (fl= control-x 0.)
+                         (exact->inexact (get-screen-width))
+                         0.)
+                     control-y
+                     .1)
+    (:= enemy.angle PI)
+    (:= enemy.state SHIP-ENEMY-NORMAL)))
 
 (define (user-game-init)
   (define enemies (get-enemies))
@@ -249,7 +312,7 @@
               (curve-rectangle rect2 0. 0. 300. 300. .2)
               (co:wait-group-done wait-group))
   (push-task! (co:wait-group-wait wait-group)
-              (set! game-over? #t)))
+              (set! ship-color BLUE)))
 
 (define last-fire-time (get-time))
 
@@ -260,46 +323,86 @@
   (define enemies (get-enemies))
   (define bullets (get-bullets))
   (arena-reset arena)
-  (with-auto-free
-   (set! tasks (co:step tasks))
-   (unless game-over?
-     (when (and (is-key-down KEY_SPACE)
-                (fl> (fl- curr-time last-fire-time) .3))
-       (set! last-fire-time curr-time)
+  (set! tasks (co:step tasks))
+  (unless game-over?
+    (when (and (is-key-down KEY_SPACE)
+               (fl> (fl- curr-time last-fire-time) .3))
+      (set! last-fire-time curr-time)
+      (with-auto-free
        (let ([bullet (alloc-struct Bullet)])
          (with-ftypes ([Bullet bullet])
            (:= bullet.position.x ship-x)
            (:= bullet.position.y (fl- ship-y 40.))
            (:= bullet.velocity.x 0.)
            (:= bullet.velocity.y (fl- 0.5))
-           (Bullet-manager-add! bullets bullet))))
-     (handle-keys dt)
-     (keep-in-bounds ship-x ship-y))
-   (Bullet-manager-for-each
-    (lambda-ftypes (bullet-idx [Bullet bullet])
-      (define collided? #f)
-      (when (spaceship-collides bullet.position.x bullet.position.y
-                                ship-x ship-y ship-scale ship-angle)
-        (set! game-over? #t))
-      (ShipEnemy-manager-for-each
-       (lambda-ftypes (enemy-idx [ShipEnemy enemy])
-         (when (spaceship-collides bullet.position.x bullet.position.y
-                                   enemy.position.x enemy.position.y
-                                   ship-scale enemy.angle)
-           (set! collided? #t)
-           (ShipEnemy-manager-remove! enemies
-                                      (ShipEnemy-manager-index-at enemies enemy-idx))))
-       enemies)
-      (if collided?
-        (Bullet-manager-remove! bullets (Bullet-manager-index-at bullets bullet-idx))
-        (bullet-update bullets bullet-idx bullet dt)))
-    bullets)))
+           (Bullet-manager-add! bullets bullet)))))
+    (handle-keys dt)
+    (keep-in-bounds ship-x ship-y))
+  (ShipEnemy-manager-for-each
+   (lambda-ftypes (enemy-idx [ShipEnemy enemy])
+     (cond
+      [(fx= enemy.state SHIP-ENEMY-NORMAL)
+       ;; 1 in a 1000 chance to be promoted to strafing.
+       (if (fx= (pseudo-random-generator-next! game-rng 1000) 1)
+           (let* ([task-name (string-append "task-" (symbol->string (gensym)))]
+                  [task (co:create-task! task-name (shipenemy-task enemy curr-time))])
+             (hashtable-set! *shipenemy-tasks* enemy-idx (list task))
+             (:= enemy.state SHIP-ENEMY-STRAFING))
+           (when (and (fl> enemy.position.y (fl* 40. 3.))
+                      (fx< (pseudo-random-generator-next! game-rng 1000) 10))
+             (with-auto-free
+              (let ([bullet (alloc-struct Bullet)])
+                (with-ftypes ([Bullet bullet])
+                  (:= bullet.position.x (ShipEnemy-normal-x enemy curr-time))
+                  (:= bullet.position.y (fl+ enemy.position.y 40.))
+                  (:= bullet.velocity.x 0.)
+                  (:= bullet.velocity.y 0.5)
+                  (Bullet-manager-add! bullets bullet))))))]
+      [(fx= enemy.state SHIP-ENEMY-STRAFING)
+       (let* ([dx (fl- ship-x enemy.position.x)]
+              [dy (fl- ship-y enemy.position.y)]
+              [angle (atan dy dx)])
+         (:= enemy.angle (fl+ angle (fl/ PI 2.)))
+         ;; Advance strafing coroutine.
+         (let ([tasks (hashtable-ref *shipenemy-tasks* enemy-idx #f)])
+           (when tasks (hashtable-set! *shipenemy-tasks* enemy-idx (co:step tasks))))
+         (when (fx< (pseudo-random-generator-next! game-rng 1000) 30)
+           (with-auto-free
+            (let ([bullet (alloc-struct Bullet)])
+              (with-ftypes ([Bullet bullet])
+                (:= bullet.position.x (fl+ enemy.position.x (fl* (flcos angle) 40.)))
+                (:= bullet.position.y (fl+ enemy.position.y (fl* (flsin angle) 40.)))
+                (:= bullet.velocity.x (fl* (flcos angle) .5))
+                (:= bullet.velocity.y (fl* (flsin angle) .5))
+                (Bullet-manager-add! bullets bullet))))))]))
+   enemies)
+  (Bullet-manager-for-each
+   (lambda-ftypes (bullet-idx [Bullet bullet])
+     (define collided? #f)
+     (when (spaceship-collides bullet.position.x bullet.position.y
+                               ship-x ship-y ship-scale ship-angle)
+       (set! game-over? #t))
+     (ShipEnemy-manager-for-each
+      (lambda-ftypes (enemy-idx [ShipEnemy enemy])
+        (when (spaceship-collides bullet.position.x bullet.position.y
+                                  (ShipEnemy-normal-x enemy curr-time)
+                                  enemy.position.y
+                                  ship-scale enemy.angle)
+          (set! collided? #t)
+          (ShipEnemy-manager-remove! enemies
+                                     (ShipEnemy-manager-index-at enemies enemy-idx))))
+      enemies)
+     (if collided?
+         (Bullet-manager-remove! bullets (Bullet-manager-index-at bullets bullet-idx))
+         (bullet-update bullets bullet-idx bullet dt)))
+   bullets))
 
 (define (user-game-draw)
   (eval-when (compile) (optimize-level 2))
   ;; Note: inside any loop we have to explicitly cast the pointer address
   ;; into the latest ftype pointer so that during a reload it always uses
   ;; the most recent definition of ftype.
+  (define curr-time (get-time))
   (define enemies (get-enemies))
   (define bullets (get-bullets))
   (with-ftypes [(ShipEnemy-manager enemies)
@@ -312,10 +415,11 @@
                     (fx- (fx/ (get-screen-width) 2) 120)
                     (fx- (fx/ (get-screen-height) 2) 20)
                     40 WHITE)
-         (spaceship-draw ship-x ship-y ship-scale ship-angle WHITE))
+         (spaceship-draw ship-x ship-y ship-scale ship-angle ship-color))
      (ShipEnemy-manager-for-each
       (lambda-ftypes (enemy-idx [ShipEnemy enemy])
-        (spaceship-draw enemy.position.x enemy.position.y
+        (spaceship-draw (ShipEnemy-normal-x enemy curr-time)
+                        enemy.position.y
                         ship-scale enemy.angle WHITE))
       enemies)
      (Bullet-manager-for-each 
