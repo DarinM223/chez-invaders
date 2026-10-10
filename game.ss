@@ -10,7 +10,8 @@
 (define game-rng (make-pseudo-random-generator))
 (let* ([t (current-time)]
        [seed-val (+ (time-second t) (time-nanosecond t))])
-  (pseudo-random-generator-seed! game-rng (+ 1 (modulo seed-val (- (expt 2 32) 1)))))
+  (pseudo-random-generator-seed! game-rng
+                                 (+ 1 (modulo seed-val (- (expt 2 32) 1)))))
 
 (define SHIP-ENEMY-NORMAL 0)
 (define SHIP-ENEMY-STRAFING 1)
@@ -26,8 +27,15 @@
     [position Vector-2]
     [velocity Vector-2]))
 
+(define-ftype Star
+  (struct
+    [position Vector-2]
+    [depth integer-8]
+    [color Color]))
+
 (define-generational ShipEnemy 100)
 (define-generational Bullet 100)
+(define-generational Star 100)
 
 (define-toplevel *shipenemy-tasks* (make-eqv-hashtable))
 
@@ -120,17 +128,19 @@
 (define-with-ftypes (ShipEnemy-curve [ShipEnemy enemy]
                                      end-x end-y control-x control-y speed)
   (with-ftypes ([ShipEnemy enemy])
-    (quad-bezier-to enemy.position.x enemy.position.y
-                    end-x end-y control-x control-y speed
-                    (lambda (x y) (:= enemy.position.x x) (:= enemy.position.y y)))))
+    (quad-bezier-to
+     enemy.position.x enemy.position.y
+     end-x end-y control-x control-y speed
+     (lambda (x y) (:= enemy.position.x x) (:= enemy.position.y y)))))
 
 (define-with-ftypes (ShipEnemy-curve2 [ShipEnemy enemy] end-x end-y
                                       control1-x control1-y
                                       control2-x control2-y
                                       speed)
-  (cubic-bezier-to enemy.position.x enemy.position.y end-x end-y
-                   control1-x control1-y control2-x control2-y speed
-                   (lambda (x y) (:= enemy.position.x x) (:= enemy.position.y y))))
+  (cubic-bezier-to
+   enemy.position.x enemy.position.y end-x end-y
+   control1-x control1-y control2-x control2-y speed
+   (lambda (x y) (:= enemy.position.x x) (:= enemy.position.y y))))
 
 (define-toplevel tasks '())
 (define-syntax (push-task! stx)
@@ -161,9 +171,11 @@
 (define-toplevel game-over? #f)
 (define-toplevel enemies (foreign-alloc (ftype-sizeof ShipEnemy-manager)))
 (define-toplevel bullets (foreign-alloc (ftype-sizeof Bullet-manager)))
+(define-toplevel stars (foreign-alloc (ftype-sizeof Star-manager)))
 
 (define (get-enemies) (make-ftype-pointer ShipEnemy-manager enemies))
 (define (get-bullets) (make-ftype-pointer Bullet-manager bullets))
+(define (get-stars) (make-ftype-pointer Star-manager stars))
 
 (define-with-ftypes (vector-2-cross-product [Vector-2 v1 v2])
   (fl- (fl* v1.x v2.y) (fl* v1.y v2.x)))
@@ -171,15 +183,19 @@
 (define-with-ftypes (vector-2-subtract [Vector-2 v1 v2])
   (make-vector-2 (fl- v1.x v2.x) (fl- v1.y v2.y)))
 
-(define-with-ftypes (drop-rectangle [Rectangle rect])
-  (when (fl<= (fl+ rect.height rect.y)
-              (fixnum->flonum (get-screen-height)))
-    (:= rect.y (fl+ 1. rect.y))))
+(define-with-ftypes (drop-star [Star star])
+  (if (fl<= star.position.y (fixnum->flonum (get-screen-height)))
+      (:= star.position.y (fl+ star.position.y
+                               (fl/ (exact->inexact (fx1+ star.depth)) 2.)))
+      (begin
+        (:= star.position.y 0.)
+        (:= star.position.x
+            (exact->inexact
+             (pseudo-random-generator-next! game-rng (get-screen-width)))))))
 
 (define (draw-triangle-fixed v1 v2 v3 color)
   (let* ([edge1 (vector-2-subtract v2 v1)]
          [edge2 (vector-2-subtract v3 v1)]
-
          [cross-z (vector-2-cross-product edge1 edge2)])
     (if (fl> cross-z 0.0)
         (draw-triangle v1 v3 v2 color)
@@ -194,9 +210,11 @@
 
 (define (spaceship-triangles-cont x y scale rad k)
   (let* ([v-top (get-rotated-vertex x y 0.0 (fl* scale -10.0) rad)]
-         [v-left (get-rotated-vertex x y (fl* scale -6.0) (fl* scale 5.0) rad)]
+         [v-left
+          (get-rotated-vertex x y (fl* scale -6.0) (fl* scale 5.0) rad)]
          [v-mid (get-rotated-vertex x y 0.0 (fl* scale 0.0) rad)]
-         [v-right (get-rotated-vertex x y (fl* scale 6.0) (fl* scale 5.0) rad)])
+         [v-right
+          (get-rotated-vertex x y (fl* scale 6.0) (fl* scale 5.0) rad)])
     (k v-top v-left v-mid)
     (k v-top v-mid v-right)))
 
@@ -240,11 +258,31 @@
     (when (fl<= ship-y 0.) (set! ship-y 0.))
     (when (fl>= ship-y height) (set! ship-y height))))
 
+(define (populate-stars stars)
+  (with-auto-free
+   (do ([i 0 (fx1+ i)])
+       ((>= i 100))
+     (let* ([x (pseudo-random-generator-next! game-rng (get-screen-width))]
+            [y (pseudo-random-generator-next! game-rng (get-screen-height))]
+            [depth (fx1+ (pseudo-random-generator-next! game-rng 3))]
+            [star (alloc-struct Star)]
+            [color (case depth
+                     [3 (make-color 40 55 90 100)]
+                     [2 (make-color 120 160 230 180)]
+                     [1 (make-color 255 255 255 255)])])
+       (with-ftypes ([Star star] [Color color])
+         (:= star.position.x (exact->inexact x))
+         (:= star.position.y (exact->inexact y))
+         (:= star.depth depth)
+         (::= &star.color color)
+         (Star-manager-add! stars star))))))
+
 (define (populate-enemies enemies rows cols)
   (define ship-width (fl* ship-scale 12.))
   (define ship-width-plus-pad (fl+ ship-width 12.))
   (define col-size (fl* ship-width-plus-pad (exact->inexact cols)))
-  (define start-x (fl- (fl/ (exact->inexact (get-screen-width)) 2.) (fl/ col-size 2.)))
+  (define start-x
+    (fl- (fl/ (exact->inexact (get-screen-width)) 2.) (fl/ col-size 2.)))
   (with-auto-free
    (let loop ([x start-x] [y 60.] [row 0] [col 0])
      (unless (fx>= row rows)
@@ -292,12 +330,15 @@
 (define (user-game-init)
   (define enemies (get-enemies))
   (define bullets (get-bullets))
+  (define stars (get-stars))
   (define wait-group (co:create-wait-group 2))
   (display "Game logic initialized!\n")
   (set! ship-x (fl/ (exact->inexact (get-screen-width)) 2.))
   (set! ship-y (fl- (fl+ (exact->inexact (get-screen-height))) 20.))
   (ShipEnemy-manager-init! enemies)
   (Bullet-manager-init! bullets)
+  (Star-manager-init! stars)
+  (populate-stars stars)
   (populate-enemies enemies 3 5)
   (push-task! move-rect1
               (move-rectangle rect1 300. 300. .2)
@@ -322,6 +363,7 @@
   (define dt (fl* (get-frame-time) 1000.))
   (define enemies (get-enemies))
   (define bullets (get-bullets))
+  (define stars (get-stars))
   (arena-reset arena)
   (set! tasks (co:step tasks))
   (unless game-over?
@@ -338,43 +380,49 @@
            (Bullet-manager-add! bullets bullet)))))
     (handle-keys dt)
     (keep-in-bounds ship-x ship-y))
+  (Star-manager-for-each (lambda (star-idx star) (drop-star star)) stars)
   (ShipEnemy-manager-for-each
    (lambda-ftypes (enemy-idx [ShipEnemy enemy])
-     (cond
-      [(fx= enemy.state SHIP-ENEMY-NORMAL)
-       ;; 1 in a 1000 chance to be promoted to strafing.
-       (if (fx= (pseudo-random-generator-next! game-rng 1000) 1)
-           (let* ([task-name (string-append "task-" (symbol->string (gensym)))]
-                  [task (co:create-task! task-name (shipenemy-task enemy curr-time))])
-             (hashtable-set! *shipenemy-tasks* enemy-idx (list task))
-             (:= enemy.state SHIP-ENEMY-STRAFING))
-           (when (and (fl> enemy.position.y (fl* 40. 3.))
-                      (fx< (pseudo-random-generator-next! game-rng 1000) 10))
-             (with-auto-free
-              (let ([bullet (alloc-struct Bullet)])
-                (with-ftypes ([Bullet bullet])
-                  (:= bullet.position.x (ShipEnemy-normal-x enemy curr-time))
-                  (:= bullet.position.y (fl+ enemy.position.y 40.))
-                  (:= bullet.velocity.x 0.)
-                  (:= bullet.velocity.y 0.5)
-                  (Bullet-manager-add! bullets bullet))))))]
-      [(fx= enemy.state SHIP-ENEMY-STRAFING)
-       (let* ([dx (fl- ship-x enemy.position.x)]
-              [dy (fl- ship-y enemy.position.y)]
-              [angle (atan dy dx)])
-         (:= enemy.angle (fl+ angle (fl/ PI 2.)))
-         ;; Advance strafing coroutine.
-         (let ([tasks (hashtable-ref *shipenemy-tasks* enemy-idx #f)])
-           (when tasks (hashtable-set! *shipenemy-tasks* enemy-idx (co:step tasks))))
-         (when (fx< (pseudo-random-generator-next! game-rng 1000) 30)
-           (with-auto-free
-            (let ([bullet (alloc-struct Bullet)])
-              (with-ftypes ([Bullet bullet])
-                (:= bullet.position.x (fl+ enemy.position.x (fl* (flcos angle) 40.)))
-                (:= bullet.position.y (fl+ enemy.position.y (fl* (flsin angle) 40.)))
-                (:= bullet.velocity.x (fl* (flcos angle) .5))
-                (:= bullet.velocity.y (fl* (flsin angle) .5))
-                (Bullet-manager-add! bullets bullet))))))]))
+     (exclusive-cond
+       [(fx= enemy.state SHIP-ENEMY-NORMAL)
+        ;; 1 in a 1000 chance to be promoted to strafing.
+        (if (fx= (pseudo-random-generator-next! game-rng 1000) 1)
+            (let* ([task-name (string-append "task-"
+                                             (symbol->string (gensym)))]
+                   [task (co:create-task! task-name
+                                          (shipenemy-task enemy curr-time))])
+              (hashtable-set! *shipenemy-tasks* enemy-idx (list task))
+              (:= enemy.state SHIP-ENEMY-STRAFING))
+            (when (and (fl> enemy.position.y (fl* 40. 3.))
+                       (fx< (pseudo-random-generator-next! game-rng 1000) 10))
+              (with-auto-free
+               (let ([bullet (alloc-struct Bullet)])
+                 (with-ftypes ([Bullet bullet])
+                   (:= bullet.position.x (ShipEnemy-normal-x enemy curr-time))
+                   (:= bullet.position.y (fl+ enemy.position.y 40.))
+                   (:= bullet.velocity.x 0.)
+                   (:= bullet.velocity.y 0.5)
+                   (Bullet-manager-add! bullets bullet))))))]
+       [(fx= enemy.state SHIP-ENEMY-STRAFING)
+        (let* ([dx (fl- ship-x enemy.position.x)]
+               [dy (fl- ship-y enemy.position.y)]
+               [angle (atan dy dx)])
+          (:= enemy.angle (fl+ angle (fl/ PI 2.)))
+          ;; Advance strafing coroutine.
+          (let ([tasks (hashtable-ref *shipenemy-tasks* enemy-idx #f)])
+            (when tasks
+              (hashtable-set! *shipenemy-tasks* enemy-idx (co:step tasks))))
+          (when (fx< (pseudo-random-generator-next! game-rng 1000) 30)
+            (with-auto-free
+             (let ([bullet (alloc-struct Bullet)])
+               (with-ftypes ([Bullet bullet])
+                 (:= bullet.position.x
+                     (fl+ enemy.position.x (fl* (flcos angle) 40.)))
+                 (:= bullet.position.y
+                     (fl+ enemy.position.y (fl* (flsin angle) 40.)))
+                 (:= bullet.velocity.x (fl* (flcos angle) .5))
+                 (:= bullet.velocity.y (fl* (flsin angle) .5))
+                 (Bullet-manager-add! bullets bullet))))))]))
    enemies)
   (Bullet-manager-for-each
    (lambda-ftypes (bullet-idx [Bullet bullet])
@@ -389,11 +437,12 @@
                                   enemy.position.y
                                   ship-scale enemy.angle)
           (set! collided? #t)
-          (ShipEnemy-manager-remove! enemies
-                                     (ShipEnemy-manager-index-at enemies enemy-idx))))
+          (ShipEnemy-manager-remove!
+           enemies (ShipEnemy-manager-index-at enemies enemy-idx))))
       enemies)
      (if collided?
-         (Bullet-manager-remove! bullets (Bullet-manager-index-at bullets bullet-idx))
+         (Bullet-manager-remove!
+          bullets (Bullet-manager-index-at bullets bullet-idx))
          (bullet-update bullets bullet-idx bullet dt)))
    bullets))
 
@@ -405,6 +454,7 @@
   (define curr-time (get-time))
   (define enemies (get-enemies))
   (define bullets (get-bullets))
+  (define stars (get-stars))
   (with-ftypes [(ShipEnemy-manager enemies)
                 (Bullet-manager bullets)]
     (with-auto-free
@@ -425,7 +475,14 @@
      (Bullet-manager-for-each 
       (lambda-ftypes (bullet-idx [Bullet bullet])
         (draw-circle-v &bullet.position 1.0 WHITE))
-      bullets))))
+      bullets)
+     (Star-manager-for-each
+      (lambda-ftypes (star-idx [Star star])
+        (case star.depth
+          [1 (draw-circle-v &star.position 1.5 &star.color)]
+          [2 (draw-circle-v &star.position 1.2 &star.color)]
+          [3 (draw-pixel-v &star.position &star.color)]))
+      stars))))
 
 (define (game-init) (safe-call user-game-init))
 (define (game-update) (safe-call user-game-update))
