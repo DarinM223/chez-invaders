@@ -38,15 +38,16 @@
 (define-generational Star 100)
 
 (define-toplevel *shipenemy-tasks* (make-eqv-hashtable))
+(define-toplevel *game-time* 0.)
 
 (import (prefix (coroutine) co:))
 
 (define (wait secs)
-  (define start-time (get-time))
-  (let loop ([curr-time (get-time)])
+  (define start-time *game-time*)
+  (let loop ([curr-time *game-time*])
     (unless (fl>= (fl- curr-time start-time) secs)
       (co:yield)
-      (loop (get-time)))))
+      (loop *game-time*))))
 
 ;; use barycentric coordinates (1-t,t) to
 ;; interpolate over a line:
@@ -57,20 +58,20 @@
 
 (define (move-to start-x start-y end-x end-y speed
                  interpolate-x interpolate-y setter)
-  (define start-time (fl* (get-time) 1000.))
+  (define start-time (fl* *game-time* 1000.))
   ;; dx/dt = speed -> dt = dx / speed
   (define distance
     (sqrt (fl+ (flexpt (fl- end-x start-x) 2.)
                (flexpt (fl- end-y start-y) 2.))))
   (define duration (fl/ distance speed))
-  (let loop ([curr-time (fl* (get-time) 1000.)])
+  (let loop ([curr-time (fl* *game-time* 1000.)])
     (let ([t (flmin 1. (fl/ (fl- curr-time start-time) duration))])
       (unless (fl< (flabs (fl- t 1.)) 0.001)
         (let ([x (interpolate-x start-x end-x t)]
               [y (interpolate-y start-y end-y t)])
           (setter x y)
           (co:yield)
-          (loop (fl* (get-time) 1000.)))))))
+          (loop (fl* *game-time* 1000.)))))))
 
 (define (line-to start-x start-y end-x end-y speed setter)
   (move-to start-x start-y end-x end-y speed lerp lerp setter))
@@ -127,11 +128,10 @@
 
 (define-with-ftypes (ShipEnemy-curve [ShipEnemy enemy]
                                      end-x end-y control-x control-y speed)
-  (with-ftypes ([ShipEnemy enemy])
-    (quad-bezier-to
-     enemy.position.x enemy.position.y
-     end-x end-y control-x control-y speed
-     (lambda (x y) (:= enemy.position.x x) (:= enemy.position.y y)))))
+  (quad-bezier-to
+   enemy.position.x enemy.position.y
+   end-x end-y control-x control-y speed
+   (lambda (x y) (:= enemy.position.x x) (:= enemy.position.y y))))
 
 (define-with-ftypes (ShipEnemy-curve2 [ShipEnemy enemy] end-x end-y
                                       control1-x control1-y
@@ -158,10 +158,6 @@
        #'(set! tasks (cons (co:create-task! task body* ...) tasks)))]))
 
 (define-toplevel arena (make-arena 1000))
-(define-toplevel rect1 (make-rectangle 50.0 50.0 100.0 100.0))
-(define-toplevel rect2 (make-rectangle 100.0 100.0 100.0 100.0))
-
-(define-toplevel rectangles (list rect1 rect2))
 (define-toplevel ship-color WHITE)
 (define-toplevel ship-x 100.0)
 (define-toplevel ship-y 60.0)
@@ -172,6 +168,8 @@
 (define-toplevel enemies (foreign-alloc (ftype-sizeof ShipEnemy-manager)))
 (define-toplevel bullets (foreign-alloc (ftype-sizeof Bullet-manager)))
 (define-toplevel stars (foreign-alloc (ftype-sizeof Star-manager)))
+(define-toplevel game-state 'start)
+(define-toplevel game-level 1)
 
 (define (get-enemies) (make-ftype-pointer ShipEnemy-manager enemies))
 (define (get-bullets) (make-ftype-pointer Bullet-manager bullets))
@@ -277,6 +275,9 @@
          (::= &star.color color)
          (Star-manager-add! stars star))))))
 
+(define (update-stars stars)
+  (Star-manager-for-each (lambda (star-idx star) (drop-star star)) stars))
+
 (define (populate-enemies enemies rows cols)
   (define ship-width (fl* ship-scale 12.))
   (define ship-width-plus-pad (fl+ ship-width 12.))
@@ -327,49 +328,41 @@
     (:= enemy.angle PI)
     (:= enemy.state SHIP-ENEMY-NORMAL)))
 
-(define (user-game-init)
+(define (load-level level)
   (define enemies (get-enemies))
   (define bullets (get-bullets))
-  (define stars (get-stars))
-  (define wait-group (co:create-wait-group 2))
   (display "Game logic initialized!\n")
   (set! ship-x (fl/ (exact->inexact (get-screen-width)) 2.))
   (set! ship-y (fl- (fl+ (exact->inexact (get-screen-height))) 20.))
+  (set! game-over? #f)
   (ShipEnemy-manager-init! enemies)
   (Bullet-manager-init! bullets)
+  (populate-enemies enemies 3 5))
+
+(define (user-game-init)
+  (define stars (get-stars))
+  (ShipEnemy-manager-init! (get-enemies))
+  (Bullet-manager-init! (get-bullets))
   (Star-manager-init! stars)
   (populate-stars stars)
-  (populate-enemies enemies 3 5)
-  (push-task! move-rect1
-              (move-rectangle rect1 300. 300. .2)
-              (wait 1.)
-              (move-rectangle rect1 300. 0. .2)
-              (curve2-rectangle rect1 0. 0. 200. 400. 100. 200. .2)
-              (co:wait-group-done wait-group))
-  (push-task! move-rect2
-              (move-rectangle rect2 500. 300. .25)
-              (wait 1.)
-              (move-rectangle rect2 500. 0. .2)
-              (curve-rectangle rect2 0. 0. 300. 300. .2)
-              (co:wait-group-done wait-group))
-  (push-task! (co:wait-group-wait wait-group)
-              (set! ship-color BLUE)))
+  (set! ship-x (fl/ (exact->inexact (get-screen-width)) 2.))
+  (set! ship-y (fl- (fl+ (exact->inexact (get-screen-height))) 20.)))
 
-(define last-fire-time (get-time))
+(define last-fire-time *game-time*)
 
-(define (user-game-update)
+(define (game-state-update)
   (eval-when (compile) (optimize-level 2))
-  (define curr-time (get-time))
   (define dt (fl* (get-frame-time) 1000.))
   (define enemies (get-enemies))
   (define bullets (get-bullets))
   (define stars (get-stars))
+  (set! *game-time* (fl+ *game-time* (get-frame-time)))
   (arena-reset arena)
   (set! tasks (co:step tasks))
   (unless game-over?
     (when (and (is-key-down KEY_SPACE)
-               (fl> (fl- curr-time last-fire-time) .3))
-      (set! last-fire-time curr-time)
+               (fl> (fl- *game-time* last-fire-time) .3))
+      (set! last-fire-time *game-time*)
       (with-auto-free
        (let ([bullet (alloc-struct Bullet)])
          (with-ftypes ([Bullet bullet])
@@ -380,25 +373,25 @@
            (Bullet-manager-add! bullets bullet)))))
     (handle-keys dt)
     (keep-in-bounds ship-x ship-y))
-  (Star-manager-for-each (lambda (star-idx star) (drop-star star)) stars)
   (ShipEnemy-manager-for-each
    (lambda-ftypes (enemy-idx [ShipEnemy enemy])
      (exclusive-cond
        [(fx= enemy.state SHIP-ENEMY-NORMAL)
-        ;; 1 in a 1000 chance to be promoted to strafing.
-        (if (fx= (pseudo-random-generator-next! game-rng 1000) 1)
+        ;; (level - 1) in 3000 chance to be promoted to strafing.
+        (if (fx< (pseudo-random-generator-next! game-rng 3000) (fx1- game-level))
             (let* ([task-name (string-append "task-"
                                              (symbol->string (gensym)))]
                    [task (co:create-task! task-name
-                                          (shipenemy-task enemy curr-time))])
+                                          (shipenemy-task enemy *game-time*))])
               (hashtable-set! *shipenemy-tasks* enemy-idx (list task))
               (:= enemy.state SHIP-ENEMY-STRAFING))
             (when (and (fl> enemy.position.y (fl* 40. 3.))
-                       (fx< (pseudo-random-generator-next! game-rng 1000) 10))
+                       (fx< (pseudo-random-generator-next! game-rng 1000)
+                            (fx* 5 game-level)))
               (with-auto-free
                (let ([bullet (alloc-struct Bullet)])
                  (with-ftypes ([Bullet bullet])
-                   (:= bullet.position.x (ShipEnemy-normal-x enemy curr-time))
+                   (:= bullet.position.x (ShipEnemy-normal-x enemy *game-time*))
                    (:= bullet.position.y (fl+ enemy.position.y 40.))
                    (:= bullet.velocity.x 0.)
                    (:= bullet.velocity.y 0.5)
@@ -412,7 +405,7 @@
           (let ([tasks (hashtable-ref *shipenemy-tasks* enemy-idx #f)])
             (when tasks
               (hashtable-set! *shipenemy-tasks* enemy-idx (co:step tasks))))
-          (when (fx< (pseudo-random-generator-next! game-rng 1000) 30)
+          (when (fx< (pseudo-random-generator-next! game-rng 1000) (fx* 5 game-level))
             (with-auto-free
              (let ([bullet (alloc-struct Bullet)])
                (with-ftypes ([Bullet bullet])
@@ -424,6 +417,7 @@
                  (:= bullet.velocity.y (fl* (flsin angle) .5))
                  (Bullet-manager-add! bullets bullet))))))]))
    enemies)
+  (Star-manager-for-each (lambda (star-idx star) (drop-star star)) stars)
   (Bullet-manager-for-each
    (lambda-ftypes (bullet-idx [Bullet bullet])
      (define collided? #f)
@@ -433,56 +427,100 @@
      (ShipEnemy-manager-for-each
       (lambda-ftypes (enemy-idx [ShipEnemy enemy])
         (when (spaceship-collides bullet.position.x bullet.position.y
-                                  (ShipEnemy-normal-x enemy curr-time)
+                                  (ShipEnemy-normal-x enemy *game-time*)
                                   enemy.position.y
                                   ship-scale enemy.angle)
           (set! collided? #t)
           (ShipEnemy-manager-remove!
-           enemies (ShipEnemy-manager-index-at enemies enemy-idx))))
+           enemies (ShipEnemy-manager-index-at enemies enemy-idx))
+          (when (fx= (ShipEnemy-manager-size enemies) 0)
+            (set! game-state 'level-complete))))
       enemies)
      (if collided?
          (Bullet-manager-remove!
           bullets (Bullet-manager-index-at bullets bullet-idx))
          (bullet-update bullets bullet-idx bullet dt)))
-   bullets))
+   bullets)
+  (when (and (is-key-pressed KEY_ENTER) game-over?)
+    (set! game-level 1)
+    (load-level game-level)))
+
+(define (user-game-update)
+  (eval-when (compile) (optimize-level 2))
+  (define dt (fl* (get-frame-time) 1000.))
+  (case game-state
+    [start
+     (update-stars (get-stars))
+     (when (is-key-pressed KEY_ENTER)
+       (load-level game-level)
+       (set! game-state 'running))]
+    [running (game-state-update)]
+    [level-complete
+     (update-stars (get-stars))
+     (handle-keys dt)
+     (when (is-key-pressed KEY_ENTER)
+       (set! game-level (fx1+ game-level))
+       (load-level game-level)
+       (set! game-state 'running))]))
+
+(define draw-text-middle
+  (rec draw-text-middle
+    (case-lambda
+      [(text size color) (draw-text-middle text size color 0 0)]
+      [(text size color offset-x offset-y)
+       (define middle-x (fx/ (get-screen-width) 2))
+       (define middle-y (fx/ (get-screen-height) 2))
+       (define text-size-x (measure-text text size))
+       ;; text-size + 2x = width
+       ;; start-x = (width - text-size) / 2
+       (define start-x (fx/ (fx- (get-screen-width) text-size-x) 2))
+       ;; size + 2y = height
+       ;; start-y = (height - size) / 2
+       (define start-y (fx/ (fx- (get-screen-height) size) 2))
+       (draw-text text (fx+ start-x offset-x) (fx+ start-y offset-y) size color)])))
 
 (define (user-game-draw)
   (eval-when (compile) (optimize-level 2))
   ;; Note: inside any loop we have to explicitly cast the pointer address
   ;; into the latest ftype pointer so that during a reload it always uses
   ;; the most recent definition of ftype.
-  (define curr-time (get-time))
   (define enemies (get-enemies))
   (define bullets (get-bullets))
   (define stars (get-stars))
-  (with-ftypes [(ShipEnemy-manager enemies)
-                (Bullet-manager bullets)]
-    (with-auto-free
-     (clear-background BLACK)
-     (for-each (lambda (rect) (draw-rectangle-rec rect BLUE)) rectangles)
-     (if game-over?
-         (draw-text "GAME OVER"
-                    (fx- (fx/ (get-screen-width) 2) 120)
-                    (fx- (fx/ (get-screen-height) 2) 20)
-                    40 WHITE)
-         (spaceship-draw ship-x ship-y ship-scale ship-angle ship-color))
-     (ShipEnemy-manager-for-each
-      (lambda-ftypes (enemy-idx [ShipEnemy enemy])
-        (spaceship-draw (ShipEnemy-normal-x enemy curr-time)
-                        enemy.position.y
-                        ship-scale enemy.angle WHITE))
-      enemies)
-     (Bullet-manager-for-each 
-      (lambda-ftypes (bullet-idx [Bullet bullet])
-        (draw-circle-v &bullet.position 1.0 WHITE))
-      bullets)
-     (Star-manager-for-each
-      (lambda-ftypes (star-idx [Star star])
-        (case star.depth
-          [1 (draw-circle-v &star.position 1.5 &star.color)]
-          [2 (draw-circle-v &star.position 1.2 &star.color)]
-          [3 (draw-pixel-v &star.position &star.color)]))
-      stars))))
+  (with-auto-free
+   (clear-background BLACK)
+   (Star-manager-for-each
+    (lambda-ftypes (star-idx [Star star])
+      (case star.depth
+        [1 (draw-circle-v &star.position 1.5 &star.color)]
+        [2 (draw-circle-v &star.position 1.2 &star.color)]
+        [3 (draw-pixel-v &star.position &star.color)]))
+    stars)
+   (case game-state
+     [start
+      (draw-text-middle "CHEZ INVADERS" 40 WHITE)
+      (draw-text-middle "Press enter to start" 20 WHITE 0 100)]
+     [running
+      (if game-over?
+          (begin
+            (draw-text-middle "GAME OVER" 40 WHITE)
+            (draw-text-middle "Press enter to restart" 20 WHITE 0 100))
+          (spaceship-draw ship-x ship-y ship-scale ship-angle ship-color))
+      (ShipEnemy-manager-for-each
+       (lambda-ftypes (enemy-idx [ShipEnemy enemy])
+         (spaceship-draw (ShipEnemy-normal-x enemy *game-time*)
+                         enemy.position.y
+                         ship-scale enemy.angle WHITE))
+       enemies)
+      (Bullet-manager-for-each 
+       (lambda-ftypes (bullet-idx [Bullet bullet])
+         (draw-circle-v &bullet.position 1.0 WHITE))
+       bullets)]
+     [level-complete
+      (spaceship-draw ship-x ship-y ship-scale ship-angle ship-color)
+      (draw-text-middle "LEVEL COMPLETE" 40 WHITE)
+      (draw-text-middle
+       (format #f "Press enter to start level ~a" (fx1+ game-level)) 20 WHITE 0 100)])))
 
 (define (game-init) (safe-call user-game-init))
 (define (game-update) (safe-call user-game-update))
