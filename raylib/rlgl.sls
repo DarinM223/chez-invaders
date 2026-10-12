@@ -187,7 +187,7 @@
    rl-ortho rl-frustum rl-mult-matrixf rl-scalef rl-rotatef
    rl-translatef rl-load-identity rl-pop-matrix rl-push-matrix
    rl-matrix-mode)
-  (import (except (chezscheme) foreign-alloc) (raylib intercept-alloc))
+  (import (except (chezscheme) foreign-alloc) (intercept-alloc))
   (begin
     (define RL_DEFAULT_BATCH_BUFFER_ELEMENTS 8192)
     (define RL_DEFAULT_BATCH_BUFFERS 1)

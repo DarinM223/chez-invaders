@@ -1,7 +1,7 @@
-(import (chezscheme)
+(import (except (chezscheme) foreign-alloc)
         (raylib raymath)
-        (raylib intercept-alloc)
         (raylib raylib (0 3))
+        (intercept-alloc)
         (utils)
         (ftypes)
         (arena)
@@ -13,6 +13,8 @@
   (pseudo-random-generator-seed! game-rng
                                  (+ 1 (modulo seed-val (- (expt 2 32) 1)))))
 
+(define MAX-GAME-LIVES 3)
+(define INVINCIBILITY-FRAMES 200)
 (define SHIP-ENEMY-NORMAL 0)
 (define SHIP-ENEMY-STRAFING 1)
 
@@ -164,12 +166,14 @@
 (define-toplevel ship-angle 0.)
 (define-toplevel ship-velocity 0.2)
 (define-toplevel ship-scale 2.)
+(define-toplevel ship-invincibility-frames 0)
 (define-toplevel game-over? #f)
 (define-toplevel enemies (foreign-alloc (ftype-sizeof ShipEnemy-manager)))
 (define-toplevel bullets (foreign-alloc (ftype-sizeof Bullet-manager)))
 (define-toplevel stars (foreign-alloc (ftype-sizeof Star-manager)))
 (define-toplevel game-state 'start)
 (define-toplevel game-level 1)
+(define-toplevel game-lives MAX-GAME-LIVES)
 
 (define (get-enemies) (make-ftype-pointer ShipEnemy-manager enemies))
 (define (get-bullets) (make-ftype-pointer Bullet-manager bullets))
@@ -218,7 +222,7 @@
 
 (define (spaceship-draw x y scale rad color)
   (spaceship-triangles-cont x y scale rad
-   (lambda (a b c) (draw-triangle-fixed a b c color))))
+                            (lambda (a b c) (draw-triangle-fixed a b c color))))
 
 (define (spaceship-collides bullet-x bullet-y
                             ship-x ship-y ship-scale ship-rad)
@@ -372,7 +376,9 @@
            (:= bullet.velocity.y (fl- 0.5))
            (Bullet-manager-add! bullets bullet)))))
     (handle-keys dt)
-    (keep-in-bounds ship-x ship-y))
+    (keep-in-bounds ship-x ship-y)
+    (when (fx> ship-invincibility-frames 0)
+      (set! ship-invincibility-frames (fx1- ship-invincibility-frames))))
   (ShipEnemy-manager-for-each
    (lambda-ftypes (enemy-idx [ShipEnemy enemy])
      (exclusive-cond
@@ -423,7 +429,12 @@
      (define collided? #f)
      (when (spaceship-collides bullet.position.x bullet.position.y
                                ship-x ship-y ship-scale ship-angle)
-       (set! game-over? #t))
+       (unless (fx> ship-invincibility-frames 0)
+         (if (fx= game-lives 0)
+             (set! game-over? #t)
+             (begin
+               (set! game-lives (fx1- game-lives))
+               (set! ship-invincibility-frames INVINCIBILITY-FRAMES)))))
      (ShipEnemy-manager-for-each
       (lambda-ftypes (enemy-idx [ShipEnemy enemy])
         (when (spaceship-collides bullet.position.x bullet.position.y
@@ -442,6 +453,7 @@
          (bullet-update bullets bullet-idx bullet dt)))
    bullets)
   (when (and (is-key-pressed KEY_ENTER) game-over?)
+    (set! game-lives MAX-GAME-LIVES)
     (set! game-level 1)
     (load-level game-level)))
 
@@ -479,6 +491,15 @@
        (define start-y (fx/ (fx- (get-screen-height) size) 2))
        (draw-text text (fx+ start-x offset-x) (fx+ start-y offset-y) size color)])))
 
+(define (game-lives-draw scale padding)
+  (define ship-width (fl* scale 6. 2.))
+  (define x (fl- (exact->inexact (get-screen-width)) (fl* 6. scale) padding))
+  (define y (fl- (exact->inexact (get-screen-height)) (fl* 5. scale) 5.))
+  (do ([i 0 (fx1+ i)])
+      ((>= i game-lives))
+    (spaceship-draw x y scale 0. ship-color)
+    (set! x (fl- x ship-width padding))))
+
 (define (user-game-draw)
   (eval-when (compile) (optimize-level 2))
   ;; Note: inside any loop we have to explicitly cast the pointer address
@@ -505,13 +526,17 @@
           (begin
             (draw-text-middle "GAME OVER" 40 WHITE)
             (draw-text-middle "Press enter to restart" 20 WHITE 0 100))
-          (spaceship-draw ship-x ship-y ship-scale ship-angle ship-color))
+          (if (fx> ship-invincibility-frames 0)
+              (when (fl> (flsin (fl* *game-time* 15.)) 0.)
+                (spaceship-draw ship-x ship-y ship-scale ship-angle ship-color))
+              (spaceship-draw ship-x ship-y ship-scale ship-angle ship-color)))
       (ShipEnemy-manager-for-each
        (lambda-ftypes (enemy-idx [ShipEnemy enemy])
          (spaceship-draw (ShipEnemy-normal-x enemy *game-time*)
                          enemy.position.y
                          ship-scale enemy.angle WHITE))
        enemies)
+      (game-lives-draw 1. 5.)
       (Bullet-manager-for-each 
        (lambda-ftypes (bullet-idx [Bullet bullet])
          (draw-circle-v &bullet.position 1.0 WHITE))

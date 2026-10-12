@@ -406,7 +406,7 @@
    is-window-minimized is-window-hidden is-window-fullscreen
    is-window-ready window-should-close close-window
    init-window)
-  (import (except (chezscheme) foreign-alloc) (raylib intercept-alloc))
+  (import (except (chezscheme) foreign-alloc) (intercept-alloc))
   (begin
     (define rad->deg (lambda (rad) (/ (* rad 180) PI)))
     (define deg->rad (lambda (deg) (/ (* deg PI) 180)))
