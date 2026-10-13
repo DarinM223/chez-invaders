@@ -9,6 +9,12 @@
          #'(unless (top-level-bound? (quote id))
              (define-top-level-value (quote id) value))])))
 
+  ;; Uncomment this and comment the other define-toplevel to build in
+  ;; Release mode.
+  ;; (define-syntax (define-toplevel stx)
+  ;;   (syntax-case stx ()
+  ;;     [(_ id value) #'(define id value)]))
+
   (define-syntax (alloc-struct stx)
     (syntax-case stx ()
       [(_ ftype)

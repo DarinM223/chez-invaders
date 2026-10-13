@@ -1,10 +1,22 @@
+#ifdef RELEASE
+#include "game_boot.h"
+#else
 #include "inotify_watcher.h"
+#endif
+#include "petite_boot.h"
 #include "raylib.h"
 #include "repl.h"
 #include "scheme.h" // Provided by Chez Scheme installation
+#include "scheme_boot.h"
 #include <stdio.h>
 #include <string.h>
 
+typedef enum main_state {
+    STATE_RUNNING = 1,
+    STATE_REPL = 2,
+} main_state;
+
+#ifndef RELEASE
 // Helper to safely load/reload the scheme file
 void reload_game_logic()
 {
@@ -18,11 +30,6 @@ void reload_game_logic()
 
     Scall1(safe_load_proc, Sstring("game.ss"));
 }
-
-typedef enum main_state {
-    STATE_RUNNING = 1,
-    STATE_REPL = 2,
-} main_state;
 
 const char *get_filename_ext(const char *filename)
 {
@@ -53,10 +60,12 @@ void inotify_callback(const char *filename, void *ctx)
         printf("Unrecognized file extension: %s\n", ext);
     }
 }
+#endif
 
 int main(int argc, char *argv[])
 {
     Sscheme_init(NULL);
+#ifndef RELEASE
     inotify_watcher watcher = {.callback = inotify_callback};
     inotify_error err;
     if ((err = inotify_watcher_init(&watcher)) ||
@@ -64,23 +73,28 @@ int main(int argc, char *argv[])
         printf("Got error initializing inotify\n");
         return err;
     }
+#endif
 
-    // Register the fundamental boot files required by the Chez VM
-    // (Adjust these paths to your native Chez Scheme installation directory)
-    Sregister_boot_file("/usr/lib/csv10.4.1/ta6le/petite.boot");
-    Sregister_boot_file("/usr/lib/csv10.4.1/ta6le/scheme.boot");
+    Sregister_boot_file_bytes("petite.boot", petite_boot, petite_boot_len);
+    Sregister_boot_file_bytes("scheme.boot", scheme_boot, scheme_boot_len);
+#ifdef RELEASE
+    Sregister_boot_file_bytes("game.boot", game_boot, game_boot_len);
     Sbuild_heap(NULL, NULL);
-
+#else
+    Sbuild_heap(NULL, NULL);
     ptr load_symbol = Stop_level_value(Sstring_to_symbol("load"));
     Scall1(load_symbol, Sstring("boot.ss"));
     reload_game_logic();
+#endif
 
-    InitWindow(800, 450, "Raylib + Chez Scheme Hot Reloading");
+    InitWindow(800, 450, "Chez Invaders");
     SetTargetFPS(60);
 
     ptr game_init = Stop_level_value(Sstring_to_symbol("game-init"));
     if (Sprocedurep(game_init)) {
         Scall0(game_init);
+    } else {
+        fprintf(stderr, "game-init is not bound to a Scheme procedure\n");
     }
 
     main_state state = STATE_RUNNING;
@@ -89,6 +103,7 @@ int main(int argc, char *argv[])
     double last_time = GetTime();
     bool reload_on_save = true;
     while (!WindowShouldClose()) {
+#ifndef RELEASE
         if (reload_on_save) {
             double current_time = GetTime();
             if (current_time - last_time >= 1) {
@@ -106,9 +121,11 @@ int main(int argc, char *argv[])
                 state = STATE_REPL;
             }
         }
+#endif
 
         switch (state) {
         case STATE_RUNNING: {
+#ifndef RELEASE
             // Trigger Hot Reload on 'p' keypress
             if (IsKeyPressed(KEY_P)) {
                 if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
@@ -119,11 +136,15 @@ int main(int argc, char *argv[])
                     reload_game_logic();
                 }
             }
+#endif
 
             ptr game_update =
                 Stop_level_value(Sstring_to_symbol("game-update"));
             if (Sprocedurep(game_update)) {
                 Scall0(game_update);
+            } else {
+                fprintf(stderr,
+                        "game-update is not bound to a Scheme procedure\n");
             }
             break;
         }
@@ -138,8 +159,11 @@ int main(int argc, char *argv[])
         ptr game_draw = Stop_level_value(Sstring_to_symbol("game-draw"));
         if (Sprocedurep(game_draw)) {
             Scall0(game_draw);
+        } else {
+            fprintf(stderr, "game-draw is not bound to a Scheme procedure\n");
         }
 
+#ifndef RELEASE
         if (state == STATE_REPL) {
             repl_draw(&repl);
         } else {
@@ -147,6 +171,7 @@ int main(int argc, char *argv[])
                 "Press p to reload, P to reload on save, and ` to go to REPL",
                 10, 10, 20, reload_on_save ? RED : MAGENTA);
         }
+#endif
 
         EndDrawing();
     }

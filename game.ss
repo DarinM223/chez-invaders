@@ -5,6 +5,7 @@
         (utils)
         (ftypes)
         (arena)
+        (game-types)
         (generational))
 
 (define game-rng (make-pseudo-random-generator))
@@ -17,23 +18,6 @@
 (define INVINCIBILITY-FRAMES 200)
 (define SHIP-ENEMY-NORMAL 0)
 (define SHIP-ENEMY-STRAFING 1)
-
-(define-ftype ShipEnemy
-  (struct
-    [position Vector-2]
-    [angle double]
-    [state integer-8]))
-
-(define-ftype Bullet
-  (struct
-    [position Vector-2]
-    [velocity Vector-2]))
-
-(define-ftype Star
-  (struct
-    [position Vector-2]
-    [depth integer-8]
-    [color Color]))
 
 (define-generational ShipEnemy 100)
 (define-generational Bullet 100)
@@ -550,6 +534,10 @@
 (define (game-init) (safe-call user-game-init))
 (define (game-update) (safe-call user-game-update))
 (define (game-draw) (safe-call user-game-draw))
+
+(define-top-level-value 'game-init game-init (interaction-environment))
+(define-top-level-value 'game-update game-update (interaction-environment))
+(define-top-level-value 'game-draw game-draw (interaction-environment))
 
 ;; Local Variables:
 ;; eval: (put 'with-ftypes 'scheme-indent-function 1)
