@@ -1,7 +1,3 @@
-;; Need these imports for `define-generational` to work when compiling.
-(import (raylib raylib (0 3)))
-(import (game-types))
-
 (compile-imported-libraries #t)
 (compile-program "game.ss" "game.so")
 
@@ -9,7 +5,6 @@
   '("petite" "scheme")
   "arena.so"
   "utils.so"
-  "game-types.so"
   "intercept-alloc.so"
   "generational.so"
   "match.so"

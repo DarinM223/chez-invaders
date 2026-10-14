@@ -33,10 +33,7 @@ reload automatically or reload when 'p' is pressed, depending on whether auto re
 
 ### To build in release mode:
 
-First go into utils.sls and uncomment the commented
-version of `define-toplevel` and comment the existing version of `define-toplevel`.
-
-Then run:
+Run:
 ```
 cmake -DCMAKE_BUILD_TYPE=Release .
 make

@@ -5,7 +5,6 @@
         (utils)
         (ftypes)
         (arena)
-        (game-types)
         (generational))
 
 (define game-rng (make-pseudo-random-generator))
@@ -18,6 +17,23 @@
 (define INVINCIBILITY-FRAMES 200)
 (define SHIP-ENEMY-NORMAL 0)
 (define SHIP-ENEMY-STRAFING 1)
+
+(define-ftype ShipEnemy
+  (struct
+    [position Vector-2]
+    [angle double]
+    [state integer-8]))
+
+(define-ftype Bullet
+  (struct
+    [position Vector-2]
+    [velocity Vector-2]))
+
+(define-ftype Star
+  (struct
+    [position Vector-2]
+    [depth integer-8]
+    [color Color]))
 
 (define-generational ShipEnemy 100)
 (define-generational Bullet 100)

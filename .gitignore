@@ -13,7 +13,6 @@ compile_commands.json
 /arena.so
 /coroutine.so
 /match.so
-/game-types.so
 Makefile
 /raylib/*.so
 /chez-raylib/*.so
@@ -21,3 +20,4 @@ Makefile
 /petite_boot.h
 /scheme_boot.h
 /game.boot
+*.wpo

@@ -1,5 +1,6 @@
 (library (ftypes)
-  (export ftype-copy-fields! with-ftypes define-with-ftypes lambda-ftypes)
+  (export copy-foreign-bytes! ftype-copy-fields!
+          with-ftypes define-with-ftypes lambda-ftypes)
   (import (chezscheme))
 
   (meta define (split-string-at-dot s)
@@ -66,41 +67,19 @@
      [(free-identifier=? id (caar env)) (cadar env)]
      [else (lookup-identifier id (cdr env))]))
 
+  (define (copy-foreign-bytes! dest src n)
+    (do ([i 0 (fx1+ i)])
+        ((fx>= i n))
+      (foreign-set! 'unsigned-8 dest i
+                    (foreign-ref 'unsigned-8 src i))))
+
   (define-syntax (ftype-copy-fields! stx)
     (syntax-case stx ()
       [(_ ftype dest src)
-       (let* ([blueprint-expr #'(cdr (ftype-pointer->sexpr
-                                      (make-ftype-pointer ftype 0)))]
-              [layout (eval (syntax->datum blueprint-expr)
-                            (interaction-environment))])
-         (define (generate-assignments layout path acc)
-           (fold-left
-            (lambda (acc field-spec)
-              (let* ([field-name (datum->syntax #'ftype (car field-spec))]
-                     [field-type (cadr field-spec)]
-                     [full-path (append path (list field-name))])
-                (cond
-                 [(and (pair? field-type) (eq? (car field-type) 'struct))
-                  (generate-assignments (cdr field-type) full-path acc)]
-                 [(and (pair? field-type) (eq? (car field-type) 'bits))
-                  (generate-assignments
-                   (map (lambda (t) (list (car t) (cadr t)))
-                        (cdr field-type))
-                   full-path acc)]
-                 [(and (pair? field-type) (eq? (car field-type) 'array))
-                  (generate-assignments
-                   (map (lambda (i) (list i (caddr field-type)))
-                        (iota (cadr field-type)))
-                   full-path acc)]
-                 [else
-                  (with-syntax ([(p ...) full-path])
-                    (cons
-                     #'(ftype-set! ftype (p ...) dest
-                                   (ftype-ref ftype (p ...) src))
-                     acc))])))
-            acc layout))
-         (with-syntax ([(stmt ...) (generate-assignments layout '() '())])
-           #'(begin stmt ...)))]))
+       #'(copy-foreign-bytes!
+          (ftype-pointer-address dest)
+          (ftype-pointer-address src)
+          (ftype-sizeof ftype))]))
 
   (meta define (parse-body body env)
     (syntax-case body ()
