@@ -174,6 +174,9 @@
 (define-toplevel game-state 'start)
 (define-toplevel game-level 1)
 (define-toplevel game-lives MAX-GAME-LIVES)
+(define-toplevel game-screen-texture #f)
+(define-toplevel game-current-shader #f)
+(define-toplevel shader-fisheye (load-shader #f "shaders/fisheye.fs"))
 
 (define (get-enemies) (make-ftype-pointer ShipEnemy-manager enemies))
 (define (get-bullets) (make-ftype-pointer Bullet-manager bullets))
@@ -345,6 +348,8 @@
 
 (define (user-game-init)
   (define stars (get-stars))
+  (set! game-screen-texture
+        (load-render-texture (get-screen-width) (get-screen-height)))
   (ShipEnemy-manager-init! (get-enemies))
   (Bullet-manager-init! (get-bullets))
   (Star-manager-init! stars)
@@ -500,7 +505,7 @@
     (spaceship-draw x y scale 0. ship-color)
     (set! x (fl- x ship-width padding))))
 
-(define (user-game-draw)
+(define (screen-game-draw)
   (eval-when (compile) (optimize-level 2))
   ;; Note: inside any loop we have to explicitly cast the pointer address
   ;; into the latest ftype pointer so that during a reload it always uses
@@ -546,6 +551,26 @@
       (draw-text-middle "LEVEL COMPLETE" 40 WHITE)
       (draw-text-middle
        (format #f "Press enter to start level ~a" (fx1+ game-level)) 20 WHITE 0 100)])))
+
+(define (user-game-draw)
+  (if game-current-shader
+      (begin
+        (begin-texture-mode game-screen-texture)
+        (screen-game-draw)
+        (end-texture-mode)
+        (with-auto-free
+         (with-ftypes ([Render-Texture game-screen-texture])
+           (begin-shader-mode game-current-shader)
+           (draw-texture-rec
+            &game-screen-texture.texture
+            ;; Render texture must be y-flipped due to default OpenGL coordinates
+            (make-rectangle 0. 0.
+                            (exact->inexact game-screen-texture.texture.width)
+                            (fl- (exact->inexact game-screen-texture.texture.height)))
+            (make-vector-2 0. 0.)
+            WHITE)
+           (end-shader-mode))))
+      (screen-game-draw)))
 
 (define (game-init) (safe-call user-game-init))
 (define (game-update) (safe-call user-game-update))
