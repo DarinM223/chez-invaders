@@ -10,5 +10,6 @@
   "match.so"
   "ftypes.so"
   "coroutine.so"
+  "shader.so"
   "raylib/raylib.so"
   "game.so")
