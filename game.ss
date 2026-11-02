@@ -1,4 +1,5 @@
-(import (except (chezscheme) foreign-alloc)
+(import (prefix (chezscheme) cs:)
+        (except (chezscheme) foreign-alloc foreign-free)
         (raylib raymath)
         (raylib raylib (0 3))
         (intercept-alloc)
@@ -177,7 +178,32 @@
 (define-toplevel game-lives MAX-GAME-LIVES)
 (define-toplevel game-screen-texture #f)
 (define-toplevel game-current-shader #f)
+(define-toplevel game-effect-duration 0.)
 (define-shader shader-fisheye #f "shaders/fisheye.fs" ())
+(define-shader shader-postprocess #f "shaders/postprocessing.fs"
+  (("scene" SHADER_UNIFORM_INT)
+   ("offsets[0]" SHADER_UNIFORM_VEC2 9)
+   ("edge_kernel[0]" SHADER_UNIFORM_INT 9)
+   ("blur_kernel[0]" SHADER_UNIFORM_FLOAT 9)
+   ("chaos" SHADER_UNIFORM_INT)
+   ("confuse" SHADER_UNIFORM_INT)
+   ("shake" SHADER_UNIFORM_INT)))
+
+(define offsets
+  (let ([offset (fl/ 1. 300.)])
+    (list (fl- offset) offset
+          0. offset
+          offset offset
+          (fl- offset) 0.
+          0. 0.
+          offset 0.
+          (fl- offset) (fl- offset)
+          0. (fl- offset)
+          offset (fl- offset))))
+
+(define edge-kernel '(-1 -1 -1 -1 8 -1 -1 -1 -1))
+(define blur-kernel (map (lambda (n) (fl/ n 16.))
+                         '(1. 2. 1. 2. 4. 2. 1. 2. 1.)))
 
 (define (get-enemies) (make-ftype-pointer ShipEnemy-manager enemies))
 (define (get-bullets) (make-ftype-pointer Bullet-manager bullets))
@@ -352,6 +378,20 @@
   (set! game-screen-texture
         (load-render-texture (get-screen-width) (get-screen-height)))
   (shader-init! shader-fisheye ())
+  (with-auto-free
+   (let ([offsets (foreign-alloc-array 'single-float offsets)]
+         [edge-kernel (foreign-alloc-array 'int edge-kernel)]
+         [blur-kernel (foreign-alloc-array 'single-float blur-kernel)]
+         [scene (foreign-alloc-array 'int '(0))]
+         [chaos (foreign-alloc-array 'int '(0))]
+         [confuse (foreign-alloc-array 'int '(0))]
+         [shake (foreign-alloc-array 'int '(1))])
+     (with-custom-alloc
+      cs:foreign-alloc (lambda (ptr) '())
+      (with-auto-free
+       (shader-init!
+        shader-postprocess
+        (scene offsets edge-kernel blur-kernel chaos confuse shake))))))
   (ShipEnemy-manager-init! (get-enemies))
   (Bullet-manager-init! (get-bullets))
   (Star-manager-init! stars)
@@ -385,7 +425,10 @@
     (handle-keys dt)
     (keep-in-bounds ship-x ship-y)
     (when (fx> ship-invincibility-frames 0)
-      (set! ship-invincibility-frames (fx1- ship-invincibility-frames))))
+      (set! ship-invincibility-frames (fx1- ship-invincibility-frames)))
+    (when (fl> game-effect-duration 0.)
+      (set! game-effect-duration (flmax 0. (fl- game-effect-duration dt)))
+      (when (fl<= game-effect-duration 0.) (set! game-current-shader #f))))
   (ShipEnemy-manager-for-each
    (lambda-ftypes (enemy-idx [ShipEnemy enemy])
      (exclusive-cond
@@ -441,7 +484,9 @@
              (set! game-over? #t)
              (begin
                (set! game-lives (fx1- game-lives))
-               (set! ship-invincibility-frames INVINCIBILITY-FRAMES)))))
+               (set! ship-invincibility-frames INVINCIBILITY-FRAMES)
+               (set! game-current-shader shader-postprocess)
+               (set! game-effect-duration 100.)))))
      (ShipEnemy-manager-for-each
       (lambda-ftypes (enemy-idx [ShipEnemy enemy])
         (when (spaceship-collides bullet.position.x bullet.position.y
@@ -556,6 +601,22 @@
 
 (define (user-game-draw)
   (shader-reload! shader-fisheye () (game-current-shader))
+  (when (shader-reload? shader-postprocess)
+    (with-auto-free
+     (let ([offsets (foreign-alloc-array 'single-float offsets)]
+           [edge-kernel (foreign-alloc-array 'int edge-kernel)]
+           [blur-kernel (foreign-alloc-array 'single-float blur-kernel)]
+           [scene (foreign-alloc-array 'int '(0))]
+           [chaos (foreign-alloc-array 'int '(0))]
+           [confuse (foreign-alloc-array 'int '(0))]
+           [shake (foreign-alloc-array 'int '(1))])
+       (with-custom-alloc
+        cs:foreign-alloc (lambda (ptr) '())
+        (with-auto-free
+         (shader-reload!
+          shader-postprocess
+          (scene offsets edge-kernel blur-kernel chaos confuse shake)
+          (game-current-shader)))))))
   (if game-current-shader
       (begin
         (begin-texture-mode game-screen-texture)
