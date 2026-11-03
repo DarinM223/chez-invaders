@@ -37,9 +37,18 @@
     [depth integer-8]
     [color Color]))
 
+(define PARTICLE-LIFE 500.)
+(define-ftype Particle
+  (struct
+    [position Vector-2]
+    [target Vector-2]
+    [life double]
+    [color Color]))
+
 (define-generational ShipEnemy 100)
 (define-generational Bullet 100)
 (define-generational Star 100)
+(define-generational Particle 1000)
 
 (define-toplevel *shipenemy-tasks* (make-eqv-hashtable))
 (define-toplevel *game-time* 0.)
@@ -173,6 +182,7 @@
 (define-toplevel enemies (foreign-alloc (ftype-sizeof ShipEnemy-manager)))
 (define-toplevel bullets (foreign-alloc (ftype-sizeof Bullet-manager)))
 (define-toplevel stars (foreign-alloc (ftype-sizeof Star-manager)))
+(define-toplevel particles (foreign-alloc (ftype-sizeof Particle-manager)))
 (define-toplevel game-state 'start)
 (define-toplevel game-level 1)
 (define-toplevel game-lives MAX-GAME-LIVES)
@@ -208,6 +218,7 @@
 (define (get-enemies) (make-ftype-pointer ShipEnemy-manager enemies))
 (define (get-bullets) (make-ftype-pointer Bullet-manager bullets))
 (define (get-stars) (make-ftype-pointer Star-manager stars))
+(define (get-particles) (make-ftype-pointer Particle-manager particles))
 
 (define-with-ftypes (vector-2-cross-product [Vector-2 v1 v2])
   (fl- (fl* v1.x v2.y) (fl* v1.y v2.x)))
@@ -309,6 +320,27 @@
          (::= &star.color color)
          (Star-manager-add! stars star))))))
 
+(define (create-explosion particles x y)
+  (with-auto-free
+   (do ([i 0 (fx1+ i)])
+       ((fx>= i 20))
+     (let* ([particle (alloc-struct Particle)]
+            [color RAYWHITE]
+            [angle (exact->inexact
+                    (deg->rad (pseudo-random-generator-next! game-rng 360)))]
+            [radius (exact->inexact
+                     (fx+ 50 (pseudo-random-generator-next! game-rng 50)))]
+            [target-x (fl+ x (fl* (flcos angle) radius))]
+            [target-y (fl+ y (fl* (flsin angle) radius))])
+       (with-ftypes ([Particle particle] [Color color])
+         (:= particle.position.x x)
+         (:= particle.position.y y)
+         (:= particle.target.x target-x)
+         (:= particle.target.y target-y)
+         (:= particle.life PARTICLE-LIFE)
+         (::= &particle.color color)
+         (Particle-manager-add! particles particle))))))
+
 (define (update-stars stars)
   (Star-manager-for-each (lambda (star-idx star) (drop-star star)) stars))
 
@@ -365,12 +397,14 @@
 (define (load-level level)
   (define enemies (get-enemies))
   (define bullets (get-bullets))
+  (define particles (get-particles))
   (display "Game logic initialized!\n")
   (set! ship-x (fl/ (exact->inexact (get-screen-width)) 2.))
   (set! ship-y (fl- (fl+ (exact->inexact (get-screen-height))) 20.))
   (set! game-over? #f)
   (ShipEnemy-manager-init! enemies)
   (Bullet-manager-init! bullets)
+  (Particle-manager-init! particles)
   (populate-enemies enemies 3 5))
 
 (define (user-game-init)
@@ -401,12 +435,22 @@
 
 (define last-fire-time *game-time*)
 
+(define (update-particles particles dt)
+  (Particle-manager-for-each
+   (lambda-ftypes (particle-idx [Particle particle])
+     (:= particle.life (fl- particle.life dt))
+     (when (fx= particle.color.a 0)
+       (Particle-manager-remove!
+        particles (Particle-manager-index-at particles particle-idx))))
+   particles))
+
 (define (game-state-update)
   (eval-when (compile) (optimize-level 2))
   (define dt (fl* (get-frame-time) 1000.))
   (define enemies (get-enemies))
   (define bullets (get-bullets))
   (define stars (get-stars))
+  (define particles (get-particles))
   (set! *game-time* (fl+ *game-time* (get-frame-time)))
   (arena-reset arena)
   (set! tasks (co:step tasks))
@@ -481,7 +525,10 @@
                                ship-x ship-y ship-scale ship-angle)
        (unless (fx> ship-invincibility-frames 0)
          (if (fx= game-lives 0)
-             (set! game-over? #t)
+             (begin
+               (when (not game-over?)
+                 (create-explosion particles ship-x ship-y))
+               (set! game-over? #t))
              (begin
                (set! game-lives (fx1- game-lives))
                (set! ship-invincibility-frames INVINCIBILITY-FRAMES)
@@ -496,6 +543,7 @@
           (set! collided? #t)
           (ShipEnemy-manager-remove!
            enemies (ShipEnemy-manager-index-at enemies enemy-idx))
+          (create-explosion particles enemy.position.x enemy.position.y)
           (when (fx= (ShipEnemy-manager-size enemies) 0)
             (set! game-state 'level-complete))))
       enemies)
@@ -504,6 +552,7 @@
           bullets (Bullet-manager-index-at bullets bullet-idx))
          (bullet-update bullets bullet-idx bullet dt)))
    bullets)
+  (update-particles particles dt)
   (when (and (is-key-pressed KEY_ENTER) game-over?)
     (set! game-lives MAX-GAME-LIVES)
     (set! game-level 1)
@@ -520,6 +569,7 @@
        (set! game-state 'running))]
     [running (game-state-update)]
     [level-complete
+     (update-particles (get-particles) dt)
      (update-stars (get-stars))
      (handle-keys dt)
      (when (is-key-pressed KEY_ENTER)
@@ -552,6 +602,22 @@
     (spaceship-draw x y scale 0. ship-color)
     (set! x (fl- x ship-width padding))))
 
+(define (draw-particles particles)
+  (Particle-manager-for-each
+   (lambda-ftypes (particle-idx [Particle particle])
+     (if (fl>= particle.life 0.)
+         (let* ([t (fl/ (fl- PARTICLE-LIFE particle.life) PARTICLE-LIFE)]
+                [x (fl+ (fl* particle.position.x (fl- 1. t))
+                        (fl* particle.target.x t))]
+                [y (fl+ (fl* particle.position.y (fl- 1. t))
+                        (fl* particle.target.y t))]
+                [position (make-vector-2 x y)])
+           (draw-circle-v position 1. &particle.color))
+         (begin
+           (:= particle.color.a (fxmax 0 (fx- particle.color.a 20)))
+           (draw-circle-v &particle.target 1. &particle.color))))
+   particles))
+
 (define (screen-game-draw)
   (eval-when (compile) (optimize-level 2))
   ;; Note: inside any loop we have to explicitly cast the pointer address
@@ -560,6 +626,7 @@
   (define enemies (get-enemies))
   (define bullets (get-bullets))
   (define stars (get-stars))
+  (define particles (get-particles))
   (with-auto-free
    (clear-background BLACK)
    (Star-manager-for-each
@@ -589,11 +656,13 @@
                          ship-scale enemy.angle WHITE))
        enemies)
       (game-lives-draw 1. 5.)
-      (Bullet-manager-for-each 
+      (Bullet-manager-for-each
        (lambda-ftypes (bullet-idx [Bullet bullet])
          (draw-circle-v &bullet.position 1.0 WHITE))
-       bullets)]
+       bullets)
+      (draw-particles particles)]
      [level-complete
+      (draw-particles particles)
       (spaceship-draw ship-x ship-y ship-scale ship-angle ship-color)
       (draw-text-middle "LEVEL COMPLETE" 40 WHITE)
       (draw-text-middle
