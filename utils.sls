@@ -1,6 +1,14 @@
 (library (utils)
-  (export define-toplevel alloc-struct -> ->> print-ftype-fields safe-call)
+  (export if-env-release define-toplevel alloc-struct
+          -> ->> print-ftype-fields safe-call)
   (import (chezscheme))
+
+  (define-syntax (if-env-release stx)
+    (syntax-case stx ()
+      [(_ release-expr debug-expr)
+       (if (equal? (getenv "BUILD_MODE_RELEASE") "1")
+           #'release-expr
+           #'debug-expr)]))
 
   (define-syntax define-toplevel
     (lambda (stx)

@@ -87,7 +87,10 @@
                                         (lookup #'shader #'uniform-types)
                                         (lookup #'shader #'uniform-counts))])
            #'(begin
-               (set! shader (load-shader vertex-file fragment-file))
+               (set! shader
+                     (if-env-release
+                      (load-shader vertex-file fragment-file)
+                      (begin (format #t "TODO: Release mode\n") #f)))
                set* ...))])))
 
   (define-syntax (shader-reload? stx)

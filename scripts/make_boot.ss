@@ -1,3 +1,5 @@
+(putenv "BUILD_MODE_RELEASE" "1")
+
 (compile-imported-libraries #t)
 (compile-program "game.ss" "game.so")
 
