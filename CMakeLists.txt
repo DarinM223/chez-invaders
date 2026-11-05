@@ -32,9 +32,21 @@ set(PETITE_BOOT_HEADER "${CMAKE_CURRENT_BINARY_DIR}/petite_boot.h")
 set(SCHEME_BOOT_HEADER "${CMAKE_CURRENT_BINARY_DIR}/scheme_boot.h")
 set(PETITE_BOOT "${CHEZ_INSTALL_DIR}/ta6le/petite.boot")
 set(SCHEME_BOOT "${CHEZ_INSTALL_DIR}/ta6le/scheme.boot")
+set(EMBEDDED_SHADERS_SS "${CMAKE_CURRENT_BINARY_DIR}/embedded-shaders.ss")
+set(EMBEDDED_SHADERS_STUB "${CMAKE_CURRENT_SOURCE_DIR}/scripts/embedded-shaders-stub.ss")
+
+add_custom_command(
+    OUTPUT "${EMBEDDED_SHADERS_SS}"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${EMBEDDED_SHADERS_STUB}" "${EMBEDDED_SHADERS_SS}"
+    DEPENDS "${EMBEDDED_SHADERS_STUB}"
+    VERBATIM
+    COMMENT "Creating embedded shader Scheme stub"
+)
 
 # Find Chez Scheme executable (assumed to be 'scheme' or 'petite')
 find_program(CHEZ_SCHEME_EXE NAMES scheme petite REQUIRED)
+find_program(XXD_EXECUTABLE NAMES xxd REQUIRED)
 
 # Custom command to compile .ss -> .boot -> C Header
 add_custom_command(
@@ -42,22 +54,23 @@ add_custom_command(
     COMMAND "${CHEZ_SCHEME_EXE}" --script "${CMAKE_CURRENT_SOURCE_DIR}/scripts/make_boot.ss" "${SCHEME_SOURCE}" "${BOOT_OUTPUT}"
     COMMAND cmake -E echo "Converting game.boot to C header..."
     # Using 'xxd -i' to convert binary to C array
-    COMMAND xxd -i "game.boot" "${GAME_BOOT_HEADER}"
+    COMMAND "${XXD_EXECUTABLE}" -i "game.boot" "${GAME_BOOT_HEADER}"
     DEPENDS "${SCHEME_SOURCE}"
+            "${EMBEDDED_SHADERS_SS}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     COMMENT "Building embedded Chez Scheme boot code"
 )
 add_custom_command(
     OUTPUT "${PETITE_BOOT_HEADER}"
     COMMAND cmake -E echo "Converting petite.boot to C header..."
-    COMMAND xxd -i -n petite_boot "${PETITE_BOOT}" "${PETITE_BOOT_HEADER}"
+    COMMAND "${XXD_EXECUTABLE}" -i -n petite_boot "${PETITE_BOOT}" "${PETITE_BOOT_HEADER}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     COMMENT "Converting petite.boot into header"
 )
 add_custom_command(
     OUTPUT "${SCHEME_BOOT_HEADER}"
     COMMAND cmake -E echo "Converting scheme.boot to C header..."
-    COMMAND xxd -i -n scheme_boot "${SCHEME_BOOT}" "${SCHEME_BOOT_HEADER}"
+    COMMAND "${XXD_EXECUTABLE}" -i -n scheme_boot "${SCHEME_BOOT}" "${SCHEME_BOOT_HEADER}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     COMMENT "Converting scheme.boot into header"
 )
@@ -76,3 +89,6 @@ target_sources(chez-invaders PRIVATE main.c repl.c inotify_watcher.c
     ${GAME_BOOT_HEADER}
     ${PETITE_BOOT_HEADER}
     ${SCHEME_BOOT_HEADER})
+
+add_custom_target(embedded-shaders DEPENDS "${EMBEDDED_SHADERS_SS}")
+add_dependencies(chez-invaders embedded-shaders)

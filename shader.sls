@@ -71,10 +71,14 @@
                   (set-shader-value-v shader loc value type count)))]
            [else (syntax-error count-tail "expected zero or one uniform count")])))))
 
+  (define (embedded-shader-source filename sources)
+    (let ([entry (assoc filename sources)])
+      (if entry (cdr entry) #f)))
+
   (define-syntax (shader-init! stx)
     (lambda (lookup)
       (syntax-case stx ()
-        [(_ shader (uniform-values* ...))
+        [(_ shader embedded-shader-sources (uniform-values* ...))
          (with-syntax ([vertex-file
                         (datum->syntax #'shader
                                        (lookup #'shader #'vertex-shader))]
@@ -89,8 +93,12 @@
            #'(begin
                (set! shader
                      (if-env-release
-                      (load-shader vertex-file fragment-file)
-                      (begin (format #t "TODO: Release mode\n") #f)))
+                      (load-shader-from-memory
+                       (embedded-shader-source vertex-file
+                                               embedded-shader-sources)
+                       (embedded-shader-source fragment-file
+                                               embedded-shader-sources))
+                      (load-shader vertex-file fragment-file)))
                set* ...))])))
 
   (define-syntax (shader-reload? stx)

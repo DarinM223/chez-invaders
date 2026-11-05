@@ -9,6 +9,8 @@
         (generational)
         (shader))
 
+(include "embedded-shaders.ss")
+
 (define game-rng (make-pseudo-random-generator))
 (let* ([t (current-time)]
        [seed-val (+ (time-second t) (time-nanosecond t))])
@@ -411,7 +413,7 @@
   (define stars (get-stars))
   (set! game-screen-texture
         (load-render-texture (get-screen-width) (get-screen-height)))
-  (shader-init! shader-fisheye ())
+  (shader-init! shader-fisheye embedded-shader-sources ())
   (with-auto-free
    (let ([offsets (foreign-alloc-array 'single-float offsets)]
          [edge-kernel (foreign-alloc-array 'int edge-kernel)]
@@ -425,6 +427,7 @@
       (with-auto-free
        (shader-init!
         shader-postprocess
+        embedded-shader-sources
         (scene offsets edge-kernel blur-kernel chaos confuse shake))))))
   (ShipEnemy-manager-init! (get-enemies))
   (Bullet-manager-init! (get-bullets))
