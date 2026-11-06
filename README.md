@@ -1,7 +1,7 @@
 chez-invaders
 =============
 
-A small Space Invaders style Raylib game to show how to do game scripting in Chez Scheme. This project includes a REPL to execute Chez Scheme code directly in the game, hot reloading of changes, macros and libraries that are helpful for game development, and a CMake configuration to package the runtime into the executable for release.
+A small Space Invaders style Raylib game to show how to do game scripting in Chez Scheme. This project includes a REPL to execute Chez Scheme code directly in the game, hot reloading of changes in the Scheme code and shaders, macros and libraries that are helpful for game development, and a CMake configuration to package the runtime into the executable for release.
 
 ![start screen](./images/chezinvaders.png)
 
