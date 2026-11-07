@@ -13,6 +13,7 @@ compile_commands.json
 /arena.so
 /coroutine.so
 /match.so
+/shader.so
 Makefile
 /raylib/*.so
 /chez-raylib/*.so
@@ -21,3 +22,4 @@ Makefile
 /scheme_boot.h
 /game.boot
 *.wpo
+/embedded-shaders.ss
