@@ -1,11 +1,15 @@
-(import (except (chezscheme) foreign-alloc)
+(import (prefix (chezscheme) cs:)
+        (except (chezscheme) foreign-alloc foreign-free)
         (raylib raymath)
         (raylib raylib (0 3))
         (intercept-alloc)
         (utils)
         (ftypes)
         (arena)
-        (generational))
+        (generational)
+        (shader))
+
+(include "embedded-shaders.ss")
 
 (define game-rng (make-pseudo-random-generator))
 (let* ([t (current-time)]
@@ -35,9 +39,18 @@
     [depth integer-8]
     [color Color]))
 
+(define PARTICLE-LIFE 500.)
+(define-ftype Particle
+  (struct
+    [position Vector-2]
+    [target Vector-2]
+    [life double]
+    [color Color]))
+
 (define-generational ShipEnemy 100)
 (define-generational Bullet 100)
 (define-generational Star 100)
+(define-generational Particle 1000)
 
 (define-toplevel *shipenemy-tasks* (make-eqv-hashtable))
 (define-toplevel *game-time* 0.)
@@ -171,13 +184,43 @@
 (define-toplevel enemies (foreign-alloc (ftype-sizeof ShipEnemy-manager)))
 (define-toplevel bullets (foreign-alloc (ftype-sizeof Bullet-manager)))
 (define-toplevel stars (foreign-alloc (ftype-sizeof Star-manager)))
+(define-toplevel particles (foreign-alloc (ftype-sizeof Particle-manager)))
 (define-toplevel game-state 'start)
 (define-toplevel game-level 1)
 (define-toplevel game-lives MAX-GAME-LIVES)
+(define-toplevel game-screen-texture #f)
+(define-toplevel game-current-shader #f)
+(define-toplevel game-effect-duration 0.)
+(define-shader shader-fisheye #f "shaders/fisheye.fs" ())
+(define-shader shader-postprocess #f "shaders/postprocessing.fs"
+  (("scene" SHADER_UNIFORM_INT)
+   ("offsets[0]" SHADER_UNIFORM_VEC2 9)
+   ("edge_kernel[0]" SHADER_UNIFORM_INT 9)
+   ("blur_kernel[0]" SHADER_UNIFORM_FLOAT 9)
+   ("chaos" SHADER_UNIFORM_INT)
+   ("confuse" SHADER_UNIFORM_INT)
+   ("shake" SHADER_UNIFORM_INT)))
+
+(define offsets
+  (let ([offset (fl/ 1. 300.)])
+    (list (fl- offset) offset
+          0. offset
+          offset offset
+          (fl- offset) 0.
+          0. 0.
+          offset 0.
+          (fl- offset) (fl- offset)
+          0. (fl- offset)
+          offset (fl- offset))))
+
+(define edge-kernel '(-1 -1 -1 -1 8 -1 -1 -1 -1))
+(define blur-kernel (map (lambda (n) (fl/ n 16.))
+                         '(1. 2. 1. 2. 4. 2. 1. 2. 1.)))
 
 (define (get-enemies) (make-ftype-pointer ShipEnemy-manager enemies))
 (define (get-bullets) (make-ftype-pointer Bullet-manager bullets))
 (define (get-stars) (make-ftype-pointer Star-manager stars))
+(define (get-particles) (make-ftype-pointer Particle-manager particles))
 
 (define-with-ftypes (vector-2-cross-product [Vector-2 v1 v2])
   (fl- (fl* v1.x v2.y) (fl* v1.y v2.x)))
@@ -279,6 +322,27 @@
          (::= &star.color color)
          (Star-manager-add! stars star))))))
 
+(define (create-explosion particles x y)
+  (with-auto-free
+   (do ([i 0 (fx1+ i)])
+       ((fx>= i 20))
+     (let* ([particle (alloc-struct Particle)]
+            [color RAYWHITE]
+            [angle (exact->inexact
+                    (deg->rad (pseudo-random-generator-next! game-rng 360)))]
+            [radius (exact->inexact
+                     (fx+ 50 (pseudo-random-generator-next! game-rng 50)))]
+            [target-x (fl+ x (fl* (flcos angle) radius))]
+            [target-y (fl+ y (fl* (flsin angle) radius))])
+       (with-ftypes ([Particle particle] [Color color])
+         (:= particle.position.x x)
+         (:= particle.position.y y)
+         (:= particle.target.x target-x)
+         (:= particle.target.y target-y)
+         (:= particle.life PARTICLE-LIFE)
+         (::= &particle.color color)
+         (Particle-manager-add! particles particle))))))
+
 (define (update-stars stars)
   (Star-manager-for-each (lambda (star-idx star) (drop-star star)) stars))
 
@@ -335,16 +399,36 @@
 (define (load-level level)
   (define enemies (get-enemies))
   (define bullets (get-bullets))
+  (define particles (get-particles))
   (display "Game logic initialized!\n")
   (set! ship-x (fl/ (exact->inexact (get-screen-width)) 2.))
   (set! ship-y (fl- (fl+ (exact->inexact (get-screen-height))) 20.))
   (set! game-over? #f)
   (ShipEnemy-manager-init! enemies)
   (Bullet-manager-init! bullets)
+  (Particle-manager-init! particles)
   (populate-enemies enemies 3 5))
 
 (define (user-game-init)
   (define stars (get-stars))
+  (set! game-screen-texture
+        (load-render-texture (get-screen-width) (get-screen-height)))
+  (shader-init! shader-fisheye embedded-shader-sources ())
+  (with-auto-free
+   (let ([offsets (foreign-alloc-array 'single-float offsets)]
+         [edge-kernel (foreign-alloc-array 'int edge-kernel)]
+         [blur-kernel (foreign-alloc-array 'single-float blur-kernel)]
+         [scene (foreign-alloc-array 'int '(0))]
+         [chaos (foreign-alloc-array 'int '(0))]
+         [confuse (foreign-alloc-array 'int '(0))]
+         [shake (foreign-alloc-array 'int '(1))])
+     (with-custom-alloc
+      cs:foreign-alloc (lambda (ptr) '())
+      (with-auto-free
+       (shader-init!
+        shader-postprocess
+        embedded-shader-sources
+        (scene offsets edge-kernel blur-kernel chaos confuse shake))))))
   (ShipEnemy-manager-init! (get-enemies))
   (Bullet-manager-init! (get-bullets))
   (Star-manager-init! stars)
@@ -354,12 +438,22 @@
 
 (define last-fire-time *game-time*)
 
+(define (update-particles particles dt)
+  (Particle-manager-for-each
+   (lambda-ftypes (particle-idx [Particle particle])
+     (:= particle.life (fl- particle.life dt))
+     (when (fx= particle.color.a 0)
+       (Particle-manager-remove!
+        particles (Particle-manager-index-at particles particle-idx))))
+   particles))
+
 (define (game-state-update)
   (eval-when (compile) (optimize-level 2))
   (define dt (fl* (get-frame-time) 1000.))
   (define enemies (get-enemies))
   (define bullets (get-bullets))
   (define stars (get-stars))
+  (define particles (get-particles))
   (set! *game-time* (fl+ *game-time* (get-frame-time)))
   (arena-reset arena)
   (set! tasks (co:step tasks))
@@ -378,7 +472,10 @@
     (handle-keys dt)
     (keep-in-bounds ship-x ship-y)
     (when (fx> ship-invincibility-frames 0)
-      (set! ship-invincibility-frames (fx1- ship-invincibility-frames))))
+      (set! ship-invincibility-frames (fx1- ship-invincibility-frames)))
+    (when (fl> game-effect-duration 0.)
+      (set! game-effect-duration (flmax 0. (fl- game-effect-duration dt)))
+      (when (fl<= game-effect-duration 0.) (set! game-current-shader #f))))
   (ShipEnemy-manager-for-each
    (lambda-ftypes (enemy-idx [ShipEnemy enemy])
      (exclusive-cond
@@ -431,10 +528,15 @@
                                ship-x ship-y ship-scale ship-angle)
        (unless (fx> ship-invincibility-frames 0)
          (if (fx= game-lives 0)
-             (set! game-over? #t)
+             (begin
+               (when (not game-over?)
+                 (create-explosion particles ship-x ship-y))
+               (set! game-over? #t))
              (begin
                (set! game-lives (fx1- game-lives))
-               (set! ship-invincibility-frames INVINCIBILITY-FRAMES)))))
+               (set! ship-invincibility-frames INVINCIBILITY-FRAMES)
+               (set! game-current-shader shader-postprocess)
+               (set! game-effect-duration 100.)))))
      (ShipEnemy-manager-for-each
       (lambda-ftypes (enemy-idx [ShipEnemy enemy])
         (when (spaceship-collides bullet.position.x bullet.position.y
@@ -444,6 +546,7 @@
           (set! collided? #t)
           (ShipEnemy-manager-remove!
            enemies (ShipEnemy-manager-index-at enemies enemy-idx))
+          (create-explosion particles enemy.position.x enemy.position.y)
           (when (fx= (ShipEnemy-manager-size enemies) 0)
             (set! game-state 'level-complete))))
       enemies)
@@ -452,6 +555,7 @@
           bullets (Bullet-manager-index-at bullets bullet-idx))
          (bullet-update bullets bullet-idx bullet dt)))
    bullets)
+  (update-particles particles dt)
   (when (and (is-key-pressed KEY_ENTER) game-over?)
     (set! game-lives MAX-GAME-LIVES)
     (set! game-level 1)
@@ -468,6 +572,7 @@
        (set! game-state 'running))]
     [running (game-state-update)]
     [level-complete
+     (update-particles (get-particles) dt)
      (update-stars (get-stars))
      (handle-keys dt)
      (when (is-key-pressed KEY_ENTER)
@@ -500,7 +605,23 @@
     (spaceship-draw x y scale 0. ship-color)
     (set! x (fl- x ship-width padding))))
 
-(define (user-game-draw)
+(define (draw-particles particles)
+  (Particle-manager-for-each
+   (lambda-ftypes (particle-idx [Particle particle])
+     (if (fl>= particle.life 0.)
+         (let* ([t (fl/ (fl- PARTICLE-LIFE particle.life) PARTICLE-LIFE)]
+                [x (fl+ (fl* particle.position.x (fl- 1. t))
+                        (fl* particle.target.x t))]
+                [y (fl+ (fl* particle.position.y (fl- 1. t))
+                        (fl* particle.target.y t))]
+                [position (make-vector-2 x y)])
+           (draw-circle-v position 1. &particle.color))
+         (begin
+           (:= particle.color.a (fxmax 0 (fx- particle.color.a 20)))
+           (draw-circle-v &particle.target 1. &particle.color))))
+   particles))
+
+(define (screen-game-draw)
   (eval-when (compile) (optimize-level 2))
   ;; Note: inside any loop we have to explicitly cast the pointer address
   ;; into the latest ftype pointer so that during a reload it always uses
@@ -508,6 +629,7 @@
   (define enemies (get-enemies))
   (define bullets (get-bullets))
   (define stars (get-stars))
+  (define particles (get-particles))
   (with-auto-free
    (clear-background BLACK)
    (Star-manager-for-each
@@ -537,15 +659,54 @@
                          ship-scale enemy.angle WHITE))
        enemies)
       (game-lives-draw 1. 5.)
-      (Bullet-manager-for-each 
+      (Bullet-manager-for-each
        (lambda-ftypes (bullet-idx [Bullet bullet])
          (draw-circle-v &bullet.position 1.0 WHITE))
-       bullets)]
+       bullets)
+      (draw-particles particles)]
      [level-complete
+      (draw-particles particles)
       (spaceship-draw ship-x ship-y ship-scale ship-angle ship-color)
       (draw-text-middle "LEVEL COMPLETE" 40 WHITE)
       (draw-text-middle
        (format #f "Press enter to start level ~a" (fx1+ game-level)) 20 WHITE 0 100)])))
+
+(define (user-game-draw)
+  (shader-reload! shader-fisheye () (game-current-shader))
+  (when (shader-reload? shader-postprocess)
+    (with-auto-free
+     (let ([offsets (foreign-alloc-array 'single-float offsets)]
+           [edge-kernel (foreign-alloc-array 'int edge-kernel)]
+           [blur-kernel (foreign-alloc-array 'single-float blur-kernel)]
+           [scene (foreign-alloc-array 'int '(0))]
+           [chaos (foreign-alloc-array 'int '(0))]
+           [confuse (foreign-alloc-array 'int '(0))]
+           [shake (foreign-alloc-array 'int '(1))])
+       (with-custom-alloc
+        cs:foreign-alloc (lambda (ptr) '())
+        (with-auto-free
+         (shader-reload!
+          shader-postprocess
+          (scene offsets edge-kernel blur-kernel chaos confuse shake)
+          (game-current-shader)))))))
+  (if game-current-shader
+      (begin
+        (begin-texture-mode game-screen-texture)
+        (screen-game-draw)
+        (end-texture-mode)
+        (with-auto-free
+         (with-ftypes ([Render-Texture game-screen-texture])
+           (begin-shader-mode game-current-shader)
+           (draw-texture-rec
+            &game-screen-texture.texture
+            ;; Render texture must be y-flipped due to default OpenGL coordinates
+            (make-rectangle 0. 0.
+                            (exact->inexact game-screen-texture.texture.width)
+                            (fl- (exact->inexact game-screen-texture.texture.height)))
+            (make-vector-2 0. 0.)
+            WHITE)
+           (end-shader-mode))))
+      (screen-game-draw)))
 
 (define (game-init) (safe-call user-game-init))
 (define (game-update) (safe-call user-game-update))
